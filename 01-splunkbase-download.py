@@ -15,7 +15,7 @@ def download(app_id, app_version, cookies, downloaded_apps, skipped_apps):
     
     # Checking if the file already exists
     if not os.path.exists(file_name):
-        download_url = f"http://splunkbase.splunk.com/app/{app_id}/release/{app_version}/download/"
+        download_url = f"https://api.splunkbase.splunk.com/api/v2/apps/{app_id}/releases/{app_version}/download/?origin=sb&lead=false"
         response = requests.get(download_url, cookies=cookies)
         if response.status_code == 200:
             with open(file_name, 'wb') as file:
