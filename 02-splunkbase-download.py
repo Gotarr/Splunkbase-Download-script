@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 ####################################
 #### Splunkbase Download Script
 #### Erstellung: 10.11.2025
@@ -16,23 +17,30 @@ Improvements over 01-splunkbase-download.py:
 Run: python 02-splunkbase-download.py
 """
 
-import requests
+import argparse
 import json
-import os
-import datetime
 import tempfile
+import datetime
+import os
+from pathlib import Path
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from email.utils import parsedate_to_datetime
+import logging
 
 
-def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps, out_dir="."):
+def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps, out_dir=Path("."), session=None):
     """Stream-download the TGZ and return updated_time in ISO8601 UTC or None.
     Returns updated_time (str) or None on failure.
     """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     file_name = f"{app_id}_{app_version}.tgz"
-    file_path = os.path.join(out_dir, file_name)
+    file_path = out_dir / file_name
     updated_time = None
 
-    if os.path.exists(file_path):
+    if file_path.exists():
         skipped_apps.append(file_name)
         return None
 
@@ -40,14 +48,17 @@ def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps,
         f"https://api.splunkbase.splunk.com/api/v2/apps/{app_id}/releases/{app_version}/download/?origin=sb&lead=false"
     )
 
+    if session is None:
+        session = requests
+
     try:
-        with requests.get(download_url, cookies=cookies, stream=True, timeout=60) as r:
+        with session.get(download_url, cookies=cookies, stream=True, timeout=60) as r:
             if r.status_code != 200:
-                print(f"Failed to download {file_name}. Status code: {r.status_code}")
+                logging.error("Failed to download %s. Status code: %s", file_name, r.status_code)
                 return None
 
             # Stream to disk
-            with open(file_path, "wb") as fh:
+            with file_path.open("wb") as fh:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         fh.write(chunk)
@@ -68,16 +79,23 @@ def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps,
             else:
                 updated_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
 
+            # Ensure reasonable file permissions on POSIX
+            try:
+                if os.name != "nt":
+                    file_path.chmod(0o644)
+            except Exception:
+                pass
+
             return updated_time
 
     except requests.RequestException as e:
-        print(f"Network error while downloading {file_name}: {e}")
+        logging.error("Network error while downloading %s: %s", file_name, e)
         # Clean up possibly partial file
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if file_path.exists():
+                file_path.unlink()
         except Exception:
-            pass
+            logging.debug("Failed to remove partial file %s", file_path, exc_info=True)
         return None
 
 
@@ -97,73 +115,104 @@ def update_Your_apps_file_atomic(apps_data, uid, new_version, updated_time, file
         # If app not present, append a new entry
         apps_data.append({"uid": uid, "version": new_version, "updated_time": updated_time})
 
-    dir_name = os.path.dirname(os.path.abspath(file_path)) or "."
+    file_path_obj = Path(file_path)
+    dir_name = str(file_path_obj.parent) or "."
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix="your_apps_", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as tmpf:
             json.dump(apps_data, tmpf, indent=4, ensure_ascii=False)
             tmpf.flush()
             os.fsync(tmpf.fileno())
-        os.replace(tmp_path, file_path)
-    except Exception as e:
-        print(f"Failed to write updated apps file: {e}")
+        # Atomic replace
+        Path(tmp_path).replace(file_path_obj)
+        # Set permissions on POSIX
         try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            if os.name != "nt":
+                file_path_obj.chmod(0o644)
         except Exception:
             pass
+    except Exception as e:
+        logging.error("Failed to write updated apps file: %s", e)
+        try:
+            if Path(tmp_path).exists():
+                Path(tmp_path).unlink()
+        except Exception:
+            logging.debug("Failed to remove temp file %s", tmp_path, exc_info=True)
         raise
 
 
-def authenticate():
-    if not os.path.exists("login.json"):
+def authenticate(session=None):
+    if not Path("login.json").exists():
         raise FileNotFoundError("login.json not found")
 
-    with open("login.json", "r", encoding="utf-8") as f:
+    with Path("login.json").open("r", encoding="utf-8") as f:
         login_data = json.load(f)
 
     login_url = "https://splunkbase.splunk.com/api/account:login/"
     payload = {"username": login_data.get("username"), "password": login_data.get("password")}
+    if session is None:
+        # fallback to requests module
+        sess = requests
+    else:
+        sess = session
+
     try:
-        resp = requests.post(login_url, data=payload, timeout=30)
+        resp = sess.post(login_url, data=payload, timeout=30)
         resp.raise_for_status()
         return resp.cookies.get_dict()
-    except requests.RequestException as e:
+    except Exception as e:
         raise RuntimeError(f"Authentication failed: {e}")
 
 
-def get_latest_version_safe(uid, cookies):
+def get_latest_version_safe(uid, cookies, session=None):
     url = f"https://splunkbase.splunk.com/api/v1/app/{uid}/release/"
+    sess = session or requests
     try:
-        resp = requests.get(url, cookies=cookies, timeout=30)
+        resp = sess.get(url, cookies=cookies, timeout=30)
         if resp.status_code != 200:
-            print(f"Error retrieving app version for {uid}: Status code {resp.status_code}")
+            logging.warning("Error retrieving app version for %s: Status code %s", uid, resp.status_code)
             return None
         data = resp.json()
         if not data or not isinstance(data, list):
-            print(f"Unexpected version response for {uid}: {type(data)}")
+            logging.warning("Unexpected version response for %s: %s", uid, type(data))
             return None
         first = data[0]
         if not isinstance(first, dict) or "name" not in first:
-            print(f"Missing 'name' in version response for {uid}")
+            logging.warning("Missing 'name' in version response for %s", uid)
             return None
         return first["name"]
     except (ValueError, json.JSONDecodeError):
-        print(f"Invalid JSON when retrieving version for {uid}")
+        logging.warning("Invalid JSON when retrieving version for %s", uid)
         return None
-    except requests.RequestException as e:
-        print(f"Network error when retrieving version for {uid}: {e}")
+    except Exception as e:
+        logging.error("Network error when retrieving version for %s: %s", uid, e)
         return None
 
 
 if __name__ == "__main__":
     try:
-        cookies = authenticate()
+        parser = argparse.ArgumentParser(description="Download Splunkbase apps listed in Your_apps.json")
+        parser.add_argument("--outdir", "-o", default=".", help="Output directory for downloaded apps")
+        parser.add_argument("--dry-run", action="store_true", help="Do not download, only check for updates")
+        parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+        args = parser.parse_args()
 
-        if not os.path.exists("Your_apps.json"):
+        out_dir = Path(args.outdir)
+
+        # Create a requests Session with retries
+        session = requests.Session()
+        retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        cookies = authenticate(session=session)
+
+        apps_file = Path("Your_apps.json")
+        if not apps_file.exists():
             raise FileNotFoundError("Your_apps.json not found")
 
-        with open("Your_apps.json", "r", encoding="utf-8") as f:
+        with apps_file.open("r", encoding="utf-8") as f:
             apps_data_from_file = json.load(f)
 
         downloaded_apps = []
@@ -172,20 +221,25 @@ if __name__ == "__main__":
         for app in apps_data_from_file:
             uid = app.get("uid")
             if uid is None:
-                print(f"Skipping entry without uid: {app}")
+                logging.warning("Skipping entry without uid: %s", app)
                 continue
 
-            latest_version = get_latest_version_safe(uid, cookies)
+            latest_version = get_latest_version_safe(uid, cookies, session=session)
             if latest_version and latest_version != app.get("version"):
-                updated_time = download_stream(uid, latest_version, cookies, downloaded_apps, skipped_apps)
+                if args.dry_run:
+                    logging.info("Would download %s -> %s", uid, latest_version)
+                    skipped_apps.append(f"{uid}_{app.get('version')}")
+                    continue
+
+                updated_time = download_stream(uid, latest_version, cookies, downloaded_apps, skipped_apps, out_dir=out_dir, session=session)
                 if updated_time:
                     # Update file atomically
-                    update_Your_apps_file_atomic(apps_data_from_file, uid, latest_version, updated_time)
+                    update_Your_apps_file_atomic(apps_data_from_file, uid, latest_version, updated_time, file_path=str(apps_file))
             else:
                 skipped_apps.append(f"{uid}_{app.get('version')}")
 
-        print(f"Downloaded apps: {downloaded_apps}")
-        print(f"Skipped apps: {skipped_apps}")
+        logging.info("Downloaded apps: %s", downloaded_apps)
+        logging.info("Skipped apps: %s", skipped_apps)
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logging.exception("An error occurred: %s", e)

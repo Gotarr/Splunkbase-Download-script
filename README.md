@@ -62,6 +62,60 @@ Dependencies:
 Files required (same as before):
 - `login.json` (username/password)
 - `Your_apps.json` (list of apps with `uid` and `version`)
-
 If you want, I can make the script overwrite the header `letzte Änderung` automatically or add retries/backoff. Tell me which additional features you'd like.
+
+## Current version changes (02-splunkbase-download.py) — 10.11.2025
+
+This repository now includes an improved downloader script `02-splunkbase-download.py`. Key changes in this version:
+
+- Streamed downloads: files are downloaded with `stream=True` and written in chunks to avoid loading entire archives into memory.
+- Defensive API handling: version API responses are validated before use (avoids IndexError/KeyError and invalid JSON crashes).
+- Atomic updates: `Your_apps.json` is written atomically (temporary file + replace) to prevent corruption on crash.
+- Cross-platform paths: replaced string paths with `pathlib.Path` to work consistently on Windows and Linux.
+- CLI args: added `--outdir` (`-o`) to choose output folder, `--dry-run` for checks without downloading, and `--verbose` for more output.
+- Logging: replaced ad-hoc prints with the `logging` module (honors `--verbose`).
+- Retries and session: network calls use a `requests.Session` with an exponential/backoff retry policy for transient errors.
+- POSIX file permissions: downloaded files and updated JSON get sensible permissions on non-Windows systems.
+- Tests: basic `pytest` tests added to validate atomic writes and download cleanup/skip behavior.
+
+These changes make the downloader more robust and suitable for running on both Windows and Linux systems.
+
+## Requirements
+
+All Python dependencies are listed in `requirements.txt`. Install them with:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Minimum required packages (also present in `requirements.txt`):
+- requests
+- urllib3
+- pytest (for running tests)
+
+## Running the script
+
+PowerShell (Windows):
+
+```powershell
+python .\02-splunkbase-download.py --outdir .\downloads
+```
+
+Bash (Linux/macOS):
+
+```bash
+python3 ./02-splunkbase-download.py -o ./downloads
+# or after making executable:
+# chmod +x ./02-splunkbase-download.py
+# ./02-splunkbase-download.py -o ./downloads
+```
+
+## Running tests
+
+Install dependencies and run the test suite with pytest (recommended inside a virtualenv):
+
+```bash
+python -m pip install -r requirements.txt
+pytest -q
+```
 
