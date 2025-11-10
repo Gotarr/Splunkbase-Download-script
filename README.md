@@ -40,3 +40,28 @@ Your_apps.json
 ]
 ```
 
+## New: robust downloader (02-splunkbase-download.py)
+
+I added a new, more robust script: `02-splunkbase-download.py`.
+
+What it improves:
+- Streamed downloads (doesn't load entire file into memory).
+- Defensive API parsing for versions (avoids IndexError/KeyError).
+- Atomic writes for `Your_apps.json` (write to temp file then replace).
+- Normalizes `Last-Modified` header to ISO8601 UTC if present.
+
+Quick usage (Windows PowerShell):
+
+```powershell
+python .\02-splunkbase-download.py
+```
+
+Dependencies:
+- requests (pip install requests)
+
+Files required (same as before):
+- `login.json` (username/password)
+- `Your_apps.json` (list of apps with `uid` and `version`)
+
+If you want, I can make the script overwrite the header `letzte Änderung` automatically or add retries/backoff. Tell me which additional features you'd like.
+

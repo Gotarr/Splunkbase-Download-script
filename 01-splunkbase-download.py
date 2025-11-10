@@ -1,13 +1,14 @@
+####################################
+#### Splunkbase Download Script
+#### Erstellung: 21.11.2023
+#### letzte Änderung: 10.11.2025
+#### Creator: Gotarr
+####################################
+
 import requests
 import json
 import os
 import datetime
-
-####################################
-#### Splunkbase Download Script
-#### Stand: 21.11.2023
-#### Creator: Gotarr
-####################################
 
 def download(app_id, app_version, cookies, downloaded_apps, skipped_apps):
     file_name = f"{app_id}_{app_version}.tgz"
