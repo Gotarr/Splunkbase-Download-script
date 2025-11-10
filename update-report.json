@@ -1,32 +1,39 @@
 {
-  "generated_at": "2025-11-10T13:46:27.351411Z",
+  "generated_at": "2025-11-10T14:23:07.289185Z",
   "summary": {
     "total": 3,
-    "to_update": 0,
-    "up_to_date": 3,
-    "errors": 0
+    "to_update": 3,
+    "up_to_date": 0,
+    "errors": 0,
+    "missing_files": 3
   },
   "results": [
     {
       "uid": 742,
-      "current": "9.1.0",
+      "current": "1.0.0",
       "latest": "9.1.0",
-      "action": "skip",
-      "reason": "already up-to-date"
+      "action": "plan-update",
+      "reason": "dry-run",
+      "file_present": false,
+      "file_path": "downloads\\742_1.0.0.tgz"
     },
     {
       "uid": 1621,
-      "current": "6.2.0",
+      "current": "1.0.0",
       "latest": "6.2.0",
-      "action": "skip",
-      "reason": "already up-to-date"
+      "action": "plan-update",
+      "reason": "dry-run",
+      "file_present": false,
+      "file_path": "downloads\\1621_1.0.0.tgz"
     },
     {
       "uid": 833,
-      "current": "10.2.0",
+      "current": "1.0.0",
       "latest": "10.2.0",
-      "action": "skip",
-      "reason": "already up-to-date"
+      "action": "plan-update",
+      "reason": "dry-run",
+      "file_present": false,
+      "file_path": "downloads\\833_1.0.0.tgz"
     }
   ]
 }

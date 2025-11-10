@@ -1,0 +1,39 @@
+{
+  "generated_at": "2025-11-10T14:23:51.224273Z",
+  "mode": "validate",
+  "summary": {
+    "errors": 0,
+    "warnings": 0,
+    "missing_files": 3,
+    "total": 3
+  },
+  "results": [
+    {
+      "uid": 742,
+      "index": 0,
+      "action": "valid",
+      "reason": "",
+      "file_present": false,
+      "file_path": "downloads\\742_1.0.0.tgz",
+      "declared_version": "1.0.0"
+    },
+    {
+      "uid": 1621,
+      "index": 1,
+      "action": "valid",
+      "reason": "",
+      "file_present": false,
+      "file_path": "downloads\\1621_1.0.0.tgz",
+      "declared_version": "1.0.0"
+    },
+    {
+      "uid": 833,
+      "index": 2,
+      "action": "valid",
+      "reason": "",
+      "file_present": false,
+      "file_path": "downloads\\833_1.0.0.tgz",
+      "declared_version": "1.0.0"
+    }
+  ]
+}
