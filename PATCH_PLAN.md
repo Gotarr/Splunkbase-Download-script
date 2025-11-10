@@ -24,24 +24,24 @@ Release-Checkliste:
 Ziel: Konsistenzfehler in `Your_apps.json` früh erkennen.
 
 Umfang:
-- [ ] Neues Flag `--validate` (nur prüfen, keine Downloads)
-- [ ] Prüfungen:
+- [x] Neues Flag `--validate` (nur prüfen, keine Downloads)
+- [x] Prüfungen:
   - Pflichtfelder: `uid`, `version`, `name`, `appid`, `updated_time`
   - Typen: `uid` (int), `version` (str), `updated_time` (ISO8601 mit TZ)
   - Doppelte `uid` erkennen
   - JSON-Parsing-Fehler sauber melden
-- [ ] Exit-Code ≠ 0 bei Fehlern
-- [ ] Optional: Ausgabe in Report via `--report-file`
+- [x] Exit-Code ≠ 0 bei Fehlern
+- [x] Optional: Ausgabe in Report via `--report-file`
 
 Abnahmekriterien:
 - `py ./splunkbase-download.py --validate` liefert klare Meldungen und Exit-Code 1 bei Fehlern
 - Keine Dateiänderungen
 
 Tests (Beispiele):
-- [ ] Gültige Datei → Exit 0
-- [ ] Fehlendes Feld → Exit 1
-- [ ] Doppelte `uid` → Exit 1
-- [ ] Falscher `updated_time`-String → Warnung oder Fehler gemäß Definition
+- [x] Gültige Datei → Exit 0
+- [x] Fehlendes Feld → Exit 1
+- [x] Doppelte `uid` → Exit 1
+- [x] Falscher `updated_time`-String → Warnung oder Fehler gemäß Definition
 
 Rollback:
 - Nur Code-Änderungen, keine Datenmutation → Rollback nicht kritisch
@@ -52,17 +52,17 @@ Rollback:
 Ziel: Abgleich zwischen deklarierten Versionen und vorhandenen `.tgz`-Dateien.
 
 Umfang:
-- [ ] Erwarteter Dateiname: `<uid>_<version>.tgz`
-- [ ] Feld `file_present` pro App (Report + Log)
-- [ ] Zusammenfassung `missing_files`
-- [ ] Wirksam in normalem Lauf und in `--validate`
+- [x] Erwarteter Dateiname: `<uid>_<version>.tgz`
+- [x] Feld `file_present` pro App (Report + Log)
+- [x] Zusammenfassung `missing_files`
+- [x] Wirksam in normalem Lauf und in `--validate`
 
 Abnahmekriterien:
 - Fehlende Dateien werden geloggt und im Report ausgewiesen
 
 Tests:
-- [ ] Datei vorhanden → `file_present=true`
-- [ ] Datei fehlt → `file_present=false` + Warnung
+- [x] Datei vorhanden → `file_present=true`
+- [x] Datei fehlt → `file_present=false` + Warnung
 
 Rollback:
 - Nur Logik/Report, keine Datenmutation
