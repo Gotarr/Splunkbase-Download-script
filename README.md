@@ -1,20 +1,50 @@
+
+
 # Splunkbase-Download-script
-Python Script for downloading Splunk Apps from Splunkbase
-Important:
-You need both files: 1) login.json for your credentials 2) Your_apps.json to dertermine wich apps should be downloaded. 
-The "uid" and "version" fields are the most important ones !
 
+Python script for automated, robust downloading of Splunk Apps from Splunkbase. Cross-platform (Windows/Linux), with secure credential handling and atomic updates.
 
-login.json
-```
-  {
-      "username": "Dein Splunk.com Loginname Oder Mail-Adresse",
-      "password": "Dein Splunk.com Passwort"
-  }
+## Features
+
+- Download Splunkbase apps listed in `Your_apps.json`
+- Secure authentication via `login.json` or interactive prompt (`--prompt-login`)
+- Streamed downloads (no memory overflow)
+- Atomic updates to `Your_apps.json` (safe against crashes)
+- Cross-platform: works on Windows and Linux
+- Logging and verbose mode (`--verbose`)
+- Retry/backoff for network errors
+- Test suite included (pytest)
+
+## Requirements
+
+All dependencies are listed in `requirements.txt`. Install them with:
+
+```bash
+python -m pip install -r requirements.txt
 ```
 
-Your_apps.json
+Minimum required packages:
+- requests
+- urllib3
+- pytest (for running tests)
+
+## Setup
+
+You need two files:
+
+- `login.json`: Stores your Splunkbase credentials
+- `Your_apps.json`: Lists the apps to download (fields: `uid`, `version`, etc.)
+
+Example `login.json`:
+```json
+{
+    "username": "your_splunkbase_username_or_email",
+    "password": "your_splunkbase_password"
+}
 ```
+
+Example `Your_apps.json`:
+```json
 [
   {
       "name": "Splunk Add-on for Microsoft Windows",
@@ -22,100 +52,102 @@ Your_apps.json
       "appid": "Splunk_TA_windows",
       "updated_time": "Tue, 26 Sep 2023 06:23:01 GMT",
       "version": "8.8.0"
-  },
-  {
-      "name": "Splunk Common Information Model (CIM)",
-      "uid": 1621,
-      "appid": "Splunk_SA_CIM",
-      "updated_time": "Wed, 08 Nov 2023 21:06:39 GMT",
-      "version": "5.1.2"
-  },
-  {
-      "name": "Splunk Add-on for Unix and Linux",
-      "uid": 833,
-      "appid": "Splunk_TA_nix",
-      "updated_time": "Wed, 08 Nov 2023 19:23:49 GMT",
-      "version": "9.0.0"
   }
 ]
 ```
 
-## New: robust downloader (02-splunkbase-download.py)
+## Usage
 
-I added a new, more robust script: `02-splunkbase-download.py`.
-
-What it improves:
-- Streamed downloads (doesn't load entire file into memory).
-- Defensive API parsing for versions (avoids IndexError/KeyError).
-- Atomic writes for `Your_apps.json` (write to temp file then replace).
-- Normalizes `Last-Modified` header to ISO8601 UTC if present.
-
-Quick usage (Windows PowerShell):
-
+### Windows (PowerShell)
 ```powershell
-python .\02-splunkbase-download.py
+python .\splunkbase-download.py --outdir .\downloads
 ```
 
-Dependencies:
-- requests (pip install requests)
-
-Files required (same as before):
-- `login.json` (username/password)
-- `Your_apps.json` (list of apps with `uid` and `version`)
-If you want, I can make the script overwrite the header `letzte Änderung` automatically or add retries/backoff. Tell me which additional features you'd like.
-
-## Current version changes (02-splunkbase-download.py) — 10.11.2025
-
-This repository now includes an improved downloader script `02-splunkbase-download.py`. Key changes in this version:
-
-- Streamed downloads: files are downloaded with `stream=True` and written in chunks to avoid loading entire archives into memory.
-- Defensive API handling: version API responses are validated before use (avoids IndexError/KeyError and invalid JSON crashes).
-- Atomic updates: `Your_apps.json` is written atomically (temporary file + replace) to prevent corruption on crash.
-- Cross-platform paths: replaced string paths with `pathlib.Path` to work consistently on Windows and Linux.
-- CLI args: added `--outdir` (`-o`) to choose output folder, `--dry-run` for checks without downloading, and `--verbose` for more output.
-- Logging: replaced ad-hoc prints with the `logging` module (honors `--verbose`).
-- Retries and session: network calls use a `requests.Session` with an exponential/backoff retry policy for transient errors.
-- POSIX file permissions: downloaded files and updated JSON get sensible permissions on non-Windows systems.
-- Tests: basic `pytest` tests added to validate atomic writes and download cleanup/skip behavior.
-
-These changes make the downloader more robust and suitable for running on both Windows and Linux systems.
-
-## Requirements
-
-All Python dependencies are listed in `requirements.txt`. Install them with:
-
+### Linux/macOS (Bash)
 ```bash
-python -m pip install -r requirements.txt
+python3 ./splunkbase-download.py -o ./downloads
+# Or make executable:
+chmod +x ./splunkbase-download.py
+./splunkbase-download.py -o ./downloads
 ```
 
-Minimum required packages (also present in `requirements.txt`):
-- requests
-- urllib3
-- pytest (for running tests)
-
-## Running the script
-
-PowerShell (Windows):
-
+### Interactive Login
+If you don't want to store credentials in `login.json`, use:
 ```powershell
-python .\02-splunkbase-download.py --outdir .\downloads
+python .\splunkbase-download.py --prompt-login
 ```
-
-Bash (Linux/macOS):
-
+or
 ```bash
-python3 ./02-splunkbase-download.py -o ./downloads
-# or after making executable:
-# chmod +x ./02-splunkbase-download.py
-# ./02-splunkbase-download.py -o ./downloads
+python3 ./splunkbase-download.py --prompt-login
+```
+You will be prompted for username and password. Optionally, you can save them to `login.json` (on Linux, permissions will be set to `0o600`).
+
+### Dry Run
+Check for updates without downloading:
+```bash
+python3 ./splunkbase-download.py --dry-run
 ```
 
-## Running tests
+## Running Tests
 
-Install dependencies and run the test suite with pytest (recommended inside a virtualenv):
-
+Install dependencies and run the test suite with pytest:
 ```bash
 python -m pip install -r requirements.txt
 pytest -q
 ```
+
+## Security Notes
+
+- Only save credentials on trusted machines
+- For encrypted credential storage, consider using an OS keyring (not included)
+- The `login.json` file contains your Splunkbase credentials in plain text
+- On Linux, the script automatically sets file permissions to `0o600` for `login.json`
+- Never commit `login.json` to version control (already in `.gitignore`)
+- This script is provided "as-is" without any warranty
+
+## Compliance
+
+**Important**: By using this script, you agree to comply with the [Splunkbase Terms of Service](https://www.splunk.com/en_us/legal/splunk-general-terms.html).
+
+This script:
+- Uses official Splunkbase APIs
+- Requires valid Splunkbase credentials
+- Downloads only apps you have access to
+- Is intended for personal/organizational use to automate app management
+
+**Users are responsible for**:
+- Ensuring they have the right to download and use the apps
+- Complying with individual app licenses
+- Following Splunkbase usage policies
+- Protecting their credentials
+
+## Third-Party Dependencies
+
+This project uses the following open-source libraries:
+- [requests](https://github.com/psf/requests) - Apache License 2.0
+- [urllib3](https://github.com/urllib3/urllib3) - MIT License
+- [pytest](https://github.com/pytest-dev/pytest) - MIT License (dev dependency)
+
+See LICENSE file for full details.
+
+## Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add/update tests as needed
+5. Submit a pull request
+
+## Support
+
+For issues, questions, or suggestions:
+- Open an issue on GitHub
+- Check existing issues before creating new ones
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for full details.
+
+**Disclaimer**: This software is provided "as-is" without warranty. The authors are not responsible for any damages or issues arising from its use.
 

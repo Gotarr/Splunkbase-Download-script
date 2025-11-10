@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2020 Tyler James Frederick
+Copyright (c) 2025 Gotarr
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,48 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+
+THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+
+This software uses the following third-party libraries:
+
+1. requests - Apache License 2.0
+   https://github.com/psf/requests
+   Copyright Kenneth Reitz
+
+2. urllib3 - MIT License
+   https://github.com/urllib3/urllib3
+   Copyright Andrey Petrov and contributors
+
+3. pytest - MIT License (development dependency)
+   https://github.com/pytest-dev/pytest
+   Copyright Holger Krekel and contributors
+
+================================================================================
+
+DISCLAIMER OF WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+THIS SOFTWARE INTERACTS WITH SPLUNKBASE API AND DOWNLOADS FILES. THE AUTHORS
+AND COPYRIGHT HOLDERS ARE NOT RESPONSIBLE FOR:
+
+- Any data loss, corruption, or security issues
+- Misuse of Splunkbase credentials
+- Violation of Splunkbase Terms of Service
+- Any damages arising from the use of this software
+
+Users are responsible for:
+- Keeping their Splunkbase credentials secure
+- Complying with Splunkbase Terms of Service
+- Using this software at their own risk
+- Verifying downloaded files before use
+
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.

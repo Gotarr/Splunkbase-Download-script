@@ -6,16 +6,6 @@
 #### Creator: Gotarr
 ####################################
 
-"""02 - Splunkbase Download Script (robust)
-
-Improvements over 01-splunkbase-download.py:
-- Streamed download (stream=True) to avoid loading whole file into memory
-- Defensive get_latest_version() with checks
-- Atomic write for Your_apps.json (write temp file then os.replace)
-- Parse Last-Modified header to ISO8601 UTC when present
-
-Run: python 02-splunkbase-download.py
-"""
 
 import argparse
 import json
@@ -28,6 +18,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from email.utils import parsedate_to_datetime
 import logging
+import getpass
 
 
 def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps, out_dir=Path("."), session=None):
@@ -141,27 +132,56 @@ def update_Your_apps_file_atomic(apps_data, uid, new_version, updated_time, file
         raise
 
 
-def authenticate(session=None):
-    if not Path("login.json").exists():
-        raise FileNotFoundError("login.json not found")
+def authenticate(session=None, prompt=False):
+    """Authenticate against Splunkbase. If `prompt` is True or login.json is missing/invalid,
+    interactively prompt for username/password. Optionally save credentials when prompted.
+    Returns cookies dict.
+    """
 
-    with Path("login.json").open("r", encoding="utf-8") as f:
-        login_data = json.load(f)
+    login_file = Path("login.json")
+    creds = {}
+    if login_file.exists():
+        try:
+            creds = json.loads(login_file.read_text(encoding="utf-8"))
+        except Exception:
+            creds = {}
 
-    login_url = "https://splunkbase.splunk.com/api/account:login/"
-    payload = {"username": login_data.get("username"), "password": login_data.get("password")}
-    if session is None:
-        # fallback to requests module
-        sess = requests
-    else:
-        sess = session
+    if not creds.get("username") or not creds.get("password"):
+        logging.error("No valid credentials found in login.json. Please provide username and password.")
+        prompt = True
 
-    try:
-        resp = sess.post(login_url, data=payload, timeout=30)
-        resp.raise_for_status()
-        return resp.cookies.get_dict()
-    except Exception as e:
-        raise RuntimeError(f"Authentication failed: {e}")
+    while True:
+        if prompt or not creds.get("username") or not creds.get("password"):
+            username = input("Splunkbase username: ")
+            password = getpass.getpass("Splunkbase password: ")
+            creds = {"username": username, "password": password}
+            save = input("Save credentials to login.json? [y/N]: ").strip().lower()
+            if save == "y":
+                try:
+                    login_file.write_text(json.dumps(creds, indent=4), encoding="utf-8")
+                    if os.name != "nt":
+                        try:
+                            login_file.chmod(0o600)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logging.warning("Could not save credentials to login.json: %s", e)
+
+        login_url = "https://splunkbase.splunk.com/api/account:login/"
+        payload = {"username": creds.get("username"), "password": creds.get("password")}
+        sess = session or requests
+        try:
+            resp = sess.post(login_url, data=payload, timeout=30)
+            if resp.status_code == 403:
+                logging.error("Authentication failed with 403 Forbidden. Please try again.")
+                prompt = True
+                continue
+            resp.raise_for_status()
+            return resp.cookies.get_dict()
+        except Exception as e:
+            logging.error(f"Authentication failed: {e}")
+            prompt = True
+            continue
 
 
 def get_latest_version_safe(uid, cookies, session=None):
@@ -187,15 +207,18 @@ def get_latest_version_safe(uid, cookies, session=None):
     except Exception as e:
         logging.error("Network error when retrieving version for %s: %s", uid, e)
         return None
-
-
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description="Download Splunkbase apps listed in Your_apps.json")
         parser.add_argument("--outdir", "-o", default=".", help="Output directory for downloaded apps")
         parser.add_argument("--dry-run", action="store_true", help="Do not download, only check for updates")
         parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+        parser.add_argument("--prompt-login", action="store_true", help="Prompt for Splunkbase login credentials interactively")
         args = parser.parse_args()
+
+        # Configure logging
+        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                            format="%(asctime)s %(levelname)s: %(message)s")
 
         out_dir = Path(args.outdir)
 
@@ -206,7 +229,7 @@ if __name__ == "__main__":
         session.mount("https://", adapter)
         session.mount("http://", adapter)
 
-        cookies = authenticate(session=session)
+        cookies = authenticate(session=session, prompt=args.prompt_login)
 
         apps_file = Path("Your_apps.json")
         if not apps_file.exists():

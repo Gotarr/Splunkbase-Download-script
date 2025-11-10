@@ -1,4 +1,4 @@
 {
-    "username": "Splunk.com Login Name or MAIL",
-    "password": "Your Splunk.com Password"
+    "username": "your_splunkbase_username_or_email",
+    "password": "your_splunkbase_password"
 }
