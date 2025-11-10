@@ -403,6 +403,407 @@ def get_latest_version_safe(uid, cookies, session=None):
     except Exception as e:
         logging.error("Network error when retrieving version for %s: %s", uid, e)
         return None
+
+
+def get_app_details(uid, cookies, session=None):
+    """Retrieve app metadata from Splunkbase API.
+    Returns dict with name, appid, uid, version (latest), updated_time or None on error.
+    """
+    url = f"https://splunkbase.splunk.com/api/v1/app/{uid}/"
+    sess = session or requests
+    try:
+        resp = sess.get(url, cookies=cookies, timeout=30)
+        if resp.status_code != 200:
+            logging.error("Failed to retrieve app details for uid=%s: HTTP %s", uid, resp.status_code)
+            return None
+        app_data = resp.json()
+        if not isinstance(app_data, dict):
+            logging.error("Invalid app details response for uid=%s", uid)
+            return None
+        
+        name = app_data.get("title", "").strip()
+        appid = app_data.get("appid", "").strip()
+        if not name or not appid:
+            logging.error("App uid=%s missing required fields (name/appid)", uid)
+            return None
+        
+        # Get latest version
+        latest_version = get_latest_version_safe(uid, cookies, session=sess)
+        if not latest_version:
+            logging.error("Could not retrieve latest version for uid=%s", uid)
+            return None
+        
+        # Use current UTC as updated_time
+        updated_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+        
+        return {
+            "name": name,
+            "uid": int(uid),
+            "appid": appid,
+            "updated_time": updated_time,
+            "version": latest_version,
+        }
+    except Exception as e:
+        logging.error("Error retrieving app details for uid=%s: %s", uid, e)
+        return None
+
+
+def load_app_name_mapping():
+    """Load app name to UID mapping from config file.
+    Returns dict with normalized app names as keys and UIDs as values.
+    """
+    mapping_file = Path("app_name_mapping.conf")
+    mapping = {}
+    
+    if not mapping_file.exists():
+        return mapping
+    
+    try:
+        with mapping_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    name, uid_str = line.split("=", 1)
+                    name = name.strip().lower().replace("-", "").replace("_", "")
+                    try:
+                        mapping[name] = int(uid_str.strip())
+                    except ValueError:
+                        continue
+    except Exception as e:
+        logging.warning("Could not load app_name_mapping.conf: %s", e)
+    
+    return mapping
+
+
+def search_app_by_name(app_name, cookies, session=None):
+    """Search Splunkbase for an app by name and return UID if found.
+    Returns dict with uid, name, appid, version or None if not found.
+    """
+    # First try local mapping file
+    mapping = load_app_name_mapping()
+    normalized = app_name.lower().replace("-", "").replace("_", "")
+    
+    if normalized in mapping:
+        uid = mapping[normalized]
+        logging.info("Found UID %s for '%s' in local mapping", uid, app_name)
+        details = get_app_details(uid, cookies, session=session)
+        if details:
+            return details
+    
+    # Fallback: Try direct API search (may not work for all Splunkbase instances)
+    url = "https://splunkbase.splunk.com/api/v1/app/"
+    sess = session or requests
+    
+    try:
+        # Search with query parameter
+        params = {"search": app_name, "limit": 10}
+        resp = sess.get(url, params=params, cookies=cookies, timeout=30)
+        if resp.status_code != 200:
+            logging.warning("Search failed for '%s': HTTP %s", app_name, resp.status_code)
+            return None
+        
+        results = resp.json()
+        if not isinstance(results, list) or len(results) == 0:
+            logging.warning("No results found for '%s'", app_name)
+            return None
+        
+        # Normalize app_name for comparison (lowercase, replace spaces/dashes)
+        normalized_query = app_name.lower().replace("-", " ").replace("_", " ")
+        
+        # Try to find exact or close match
+        for app in results:
+            if not isinstance(app, dict):
+                continue
+            
+            title = app.get("title", "").lower().replace("-", " ").replace("_", " ")
+            appid = app.get("appid", "").lower().replace("-", " ").replace("_", " ")
+            
+            # Check if query matches title or appid closely
+            if normalized_query in title or title in normalized_query or normalized_query in appid:
+                uid = app.get("uid")
+                if uid:
+                    # Get latest version
+                    latest_version = get_latest_version_safe(uid, cookies, session=sess)
+                    return {
+                        "uid": int(uid),
+                        "name": app.get("title", "").strip(),
+                        "appid": app.get("appid", "").strip(),
+                        "version": latest_version if latest_version else "unknown",
+                    }
+        
+        # If no close match, return first result
+        first = results[0]
+        uid = first.get("uid")
+        if uid:
+            latest_version = get_latest_version_safe(uid, cookies, session=sess)
+            return {
+                "uid": int(uid),
+                "name": first.get("title", "").strip(),
+                "appid": first.get("appid", "").strip(),
+                "version": latest_version if latest_version else "unknown",
+            }
+        
+        return None
+        
+    except Exception as e:
+        logging.error("Error searching for '%s': %s", app_name, e)
+        return None
+
+
+def extract_app_info_from_filename(filename):
+    """Extract app name and version from Splunkbase TGZ filename.
+    Expected formats:
+    - app-name_version.tgz
+    - app-name_version_something.tgz
+    Returns (app_name, version) tuple or (None, None) if invalid.
+    """
+    if not filename.endswith(".tgz"):
+        return None, None
+    
+    # Remove .tgz extension
+    base = filename[:-4]
+    
+    # Split by underscore - last part before .tgz should be version or part of it
+    parts = base.rsplit("_", 1)
+    if len(parts) == 2:
+        app_name = parts[0]
+        version = parts[1]
+        return app_name, version
+    
+    return None, None
+
+
+def extract_uids_from_filenames(filenames):
+    """Extract UIDs from Splunkbase TGZ filenames.
+    Expected format: app-name_UID.tgz or appname_UID.tgz
+    Returns set of unique UIDs.
+    """
+    uids = set()
+    pattern = re.compile(r'_(\d+)\.tgz$')
+    for fname in filenames:
+        match = pattern.search(fname)
+        if match:
+            uids.add(int(match.group(1)))
+    return uids
+
+
+def onboard_apps_from_files(file_source, session=None):
+    """Read filenames from a file or directory and search Splunkbase by app name to populate Your_apps.json.
+    file_source can be:
+    - Path to a text file with one filename per line
+    - Path to a directory containing .tgz files
+    """
+    source_path = Path(file_source)
+    filenames = []
+    
+    if source_path.is_file():
+        # Read filenames from text file
+        try:
+            with source_path.open("r", encoding="utf-8") as f:
+                filenames = [line.strip() for line in f if line.strip()]
+            print(f"✓ Read {len(filenames)} filename(s) from {source_path}")
+        except Exception as e:
+            logging.error("Failed to read file %s: %s", source_path, e)
+            print(f"✗ Error reading {source_path}: {e}")
+            return
+    elif source_path.is_dir():
+        # Scan directory for .tgz files
+        try:
+            filenames = [f.name for f in source_path.glob("*.tgz")]
+            print(f"✓ Found {len(filenames)} .tgz file(s) in {source_path}")
+        except Exception as e:
+            logging.error("Failed to scan directory %s: %s", source_path, e)
+            print(f"✗ Error scanning {source_path}: {e}")
+            return
+    else:
+        print(f"✗ {source_path} is neither a file nor a directory")
+        return
+    
+    if not filenames:
+        print("No filenames to process.")
+        return
+    
+    # Parse filenames to extract app names
+    apps_to_search = []
+    for fname in filenames:
+        app_name, version = extract_app_info_from_filename(fname)
+        if app_name:
+            apps_to_search.append((fname, app_name, version))
+        else:
+            print(f"⚠ Could not parse filename: {fname}")
+    
+    if not apps_to_search:
+        print("✗ No valid filenames to process (expected format: app-name_version.tgz)")
+        return
+    
+    print(f"✓ Parsed {len(apps_to_search)} app filename(s)")
+    
+    # Check against existing
+    apps_file = Path("Your_apps.json")
+    existing_apps = []
+    if apps_file.exists():
+        try:
+            with apps_file.open("r", encoding="utf-8") as f:
+                existing_apps = json.load(f)
+            if not isinstance(existing_apps, list):
+                existing_apps = []
+        except Exception:
+            existing_apps = []
+    
+    existing_uids = {app.get("uid") for app in existing_apps if isinstance(app, dict) and "uid" in app}
+    existing_names = {app.get("name", "").lower() for app in existing_apps if isinstance(app, dict)}
+    
+    # Authenticate and search
+    cookies = authenticate(session=session, prompt=False)
+    print(f"\nSearching Splunkbase for {len(apps_to_search)} app(s)...\n")
+    
+    new_apps = []
+    added_uids = set()  # Track UIDs added in this session to avoid duplicates
+    for fname, app_name, version in apps_to_search:
+        print(f"  '{app_name}' (from {fname})... ", end="", flush=True)
+        
+        result = search_app_by_name(app_name, cookies, session=session)
+        if result:
+            uid = result.get("uid")
+            name = result.get("name")
+            
+            if uid in existing_uids:
+                print(f"⚠ Already exists (UID {uid})")
+                continue
+            
+            if uid in added_uids:
+                print(f"⚠ Duplicate in this batch (UID {uid})")
+                continue
+            
+            # Get latest version and metadata
+            latest_version = get_latest_version_safe(uid, cookies, session=session)
+            if not latest_version:
+                print(f"✗ Found UID {uid} but no version available")
+                continue
+            
+            updated_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+            
+            new_apps.append({
+                "name": name,
+                "uid": uid,
+                "appid": result.get("appid"),
+                "updated_time": updated_time,
+                "version": latest_version,
+            })
+            added_uids.add(uid)
+            print(f"✓ {name} (UID {uid}, v{latest_version})")
+        else:
+            print("✗ Not found")
+    
+    if not new_apps:
+        print("\n✗ No new apps to add. Your_apps.json not modified.")
+        return
+    
+    # Merge and write
+    combined = existing_apps + new_apps
+    formatted = format_apps_for_readability(combined, sort_by="name")
+    
+    try:
+        atomic_write_json(apps_file, formatted)
+        print(f"\n✓ Successfully added {len(new_apps)} app(s) to Your_apps.json")
+        print("\nAdded apps:")
+        for app in new_apps:
+            print(f"  - {app['name']} (UID {app['uid']}, v{app['version']})")
+    except Exception as e:
+        logging.error("Failed to write Your_apps.json: %s", e)
+        print(f"\n✗ Error writing Your_apps.json: {e}")
+
+
+
+def onboard_apps_interactive(session=None):
+    """Interactive wizard to add apps to Your_apps.json by UID.
+    Prompts user for UIDs, fetches metadata from Splunkbase, and updates Your_apps.json atomically.
+    """
+    apps_file = Path("Your_apps.json")
+    existing_apps = []
+    if apps_file.exists():
+        try:
+            with apps_file.open("r", encoding="utf-8") as f:
+                existing_apps = json.load(f)
+            if not isinstance(existing_apps, list):
+                logging.error("Your_apps.json is not a list; creating new file")
+                existing_apps = []
+        except Exception as e:
+            logging.warning("Could not read existing Your_apps.json: %s; starting fresh", e)
+            existing_apps = []
+    
+    existing_uids = {app.get("uid") for app in existing_apps if isinstance(app, dict) and "uid" in app}
+    
+    print("\n=== Splunkbase App Onboarding ===")
+    print("Enter Splunkbase app UIDs (comma-separated or one per line).")
+    print("Example UIDs: 742 (Windows TA), 1621 (CIM), 833 (Unix/Linux TA)")
+    print("Press Ctrl+C or enter an empty line to finish.\n")
+    
+    cookies = authenticate(session=session, prompt=False)
+    
+    uids_to_add = []
+    while True:
+        try:
+            line = input("App UID(s): ").strip()
+            if not line:
+                break
+            # Parse comma-separated or space-separated UIDs
+            parts = re.split(r'[,\s]+', line)
+            for p in parts:
+                p = p.strip()
+                if not p:
+                    continue
+                try:
+                    uid = int(p)
+                    if uid in existing_uids:
+                        print(f"  ⚠ UID {uid} already exists in Your_apps.json, skipping.")
+                    elif uid in uids_to_add:
+                        print(f"  ⚠ UID {uid} already queued, skipping duplicate.")
+                    else:
+                        uids_to_add.append(uid)
+                        print(f"  ✓ Queued UID {uid}")
+                except ValueError:
+                    print(f"  ✗ Invalid UID: {p}")
+        except (EOFError, KeyboardInterrupt):
+            print("\nOnboarding cancelled.")
+            return
+    
+    if not uids_to_add:
+        print("No new apps to add.")
+        return
+    
+    print(f"\nFetching details for {len(uids_to_add)} app(s) from Splunkbase...")
+    new_apps = []
+    for uid in uids_to_add:
+        print(f"  Retrieving uid={uid}...", end=" ")
+        details = get_app_details(uid, cookies, session=session)
+        if details:
+            new_apps.append(details)
+            print(f"✓ {details['name']} v{details['version']}")
+        else:
+            print("✗ Failed")
+    
+    if not new_apps:
+        print("No valid apps retrieved. Your_apps.json not modified.")
+        return
+    
+    # Merge with existing and format
+    combined = existing_apps + new_apps
+    formatted = format_apps_for_readability(combined, sort_by="name")
+    
+    # Atomic write
+    try:
+        atomic_write_json(apps_file, formatted)
+        print(f"\n✓ Successfully added {len(new_apps)} app(s) to Your_apps.json")
+        print("Added apps:")
+        for app in new_apps:
+            print(f"  - {app['name']} (UID {app['uid']}, v{app['version']})")
+    except Exception as e:
+        logging.error("Failed to write Your_apps.json: %s", e)
+        print(f"✗ Error writing Your_apps.json: {e}")
+
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description="Download Splunkbase apps listed in Your_apps.json")
@@ -416,11 +817,27 @@ if __name__ == "__main__":
         parser.add_argument("--format-json", action="store_true", help="Rewrite Your_apps.json with consistent formatting (pretty, key order)")
         parser.add_argument("--fix-missing", action="store_true", help="If an app is up-to-date but its declared file is missing, re-download it (or plan it in dry-run)")
         parser.add_argument("--fix-missing-upgrade", action="store_true", help="Reserved for future: no effect now; upgrades already occur when newer versions exist")
+        parser.add_argument("--onboard", action="store_true", help="Interactive mode: add new apps to Your_apps.json by UID; fetches metadata from Splunkbase")
+        parser.add_argument("--from-files", metavar="PATH", help="With --onboard: extract UIDs from .tgz filenames in a directory or text file (one filename per line)")
         args = parser.parse_args()
 
         # Configure logging
         logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                             format="%(asctime)s %(levelname)s: %(message)s")
+
+        # Onboarding mode: interactive wizard to add apps
+        if args.onboard:
+            session = requests.Session()
+            retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+            adapter = HTTPAdapter(max_retries=retries)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            
+            if args.from_files:
+                onboard_apps_from_files(args.from_files, session=session)
+            else:
+                onboard_apps_interactive(session=session)
+            sys.exit(0)
 
         apps_file = Path("Your_apps.json")
         if not apps_file.exists():
