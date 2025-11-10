@@ -1,0 +1,32 @@
+{
+  "generated_at": "2025-11-10T13:46:27.351411Z",
+  "summary": {
+    "total": 3,
+    "to_update": 0,
+    "up_to_date": 3,
+    "errors": 0
+  },
+  "results": [
+    {
+      "uid": 742,
+      "current": "9.1.0",
+      "latest": "9.1.0",
+      "action": "skip",
+      "reason": "already up-to-date"
+    },
+    {
+      "uid": 1621,
+      "current": "6.2.0",
+      "latest": "6.2.0",
+      "action": "skip",
+      "reason": "already up-to-date"
+    },
+    {
+      "uid": 833,
+      "current": "10.2.0",
+      "latest": "10.2.0",
+      "action": "skip",
+      "reason": "already up-to-date"
+    }
+  ]
+}

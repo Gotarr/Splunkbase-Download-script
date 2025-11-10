@@ -19,6 +19,7 @@ from urllib3.util.retry import Retry
 from email.utils import parsedate_to_datetime
 import logging
 import getpass
+from typing import List, Dict, Any
 
 
 def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps, out_dir=Path("."), session=None):
@@ -214,6 +215,8 @@ if __name__ == "__main__":
         parser.add_argument("--dry-run", action="store_true", help="Do not download, only check for updates")
         parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
         parser.add_argument("--prompt-login", action="store_true", help="Prompt for Splunkbase login credentials interactively")
+        parser.add_argument("--summary", action="store_true", help="Print a concise summary table of update decisions")
+        parser.add_argument("--report-file", help="Write a JSON report with per-app decisions (uid, current, latest, action, reason)")
         args = parser.parse_args()
 
         # Configure logging
@@ -238,8 +241,13 @@ if __name__ == "__main__":
         with apps_file.open("r", encoding="utf-8") as f:
             apps_data_from_file = json.load(f)
 
-        downloaded_apps = []
-        skipped_apps = []
+        downloaded_apps: List[str] = []
+        skipped_apps: List[str] = []
+        eval_results: List[Dict[str, Any]] = []
+        total_apps = 0
+        to_update = 0
+        up_to_date = 0
+        errors = 0
 
         for app in apps_data_from_file:
             uid = app.get("uid")
@@ -247,22 +255,121 @@ if __name__ == "__main__":
                 logging.warning("Skipping entry without uid: %s", app)
                 continue
 
+            total_apps += 1
+            current_version = app.get("version")
             latest_version = get_latest_version_safe(uid, cookies, session=session)
-            if latest_version and latest_version != app.get("version"):
+            if not latest_version:
+                logging.warning("Could not retrieve latest version for uid=%s (current=%s)", uid, current_version)
+                eval_results.append({
+                    "uid": uid,
+                    "current": current_version,
+                    "latest": None,
+                    "action": "error",
+                    "reason": "latest version not available"
+                })
+                errors += 1
+                skipped_apps.append(f"{uid}_{current_version}")
+                continue
+
+            if latest_version != current_version:
+                logging.info("Update available: uid=%s %s -> %s", uid, current_version, latest_version)
+                to_update += 1
                 if args.dry_run:
-                    logging.info("Would download %s -> %s", uid, latest_version)
-                    skipped_apps.append(f"{uid}_{app.get('version')}")
+                    logging.info("Dry-run: would download uid=%s version %s", uid, latest_version)
+                    skipped_apps.append(f"{uid}_{current_version}")
+                    eval_results.append({
+                        "uid": uid,
+                        "current": current_version,
+                        "latest": latest_version,
+                        "action": "plan-update",
+                        "reason": "dry-run"
+                    })
                     continue
 
                 updated_time = download_stream(uid, latest_version, cookies, downloaded_apps, skipped_apps, out_dir=out_dir, session=session)
                 if updated_time:
                     # Update file atomically
                     update_Your_apps_file_atomic(apps_data_from_file, uid, latest_version, updated_time, file_path=str(apps_file))
+                    eval_results.append({
+                        "uid": uid,
+                        "current": current_version,
+                        "latest": latest_version,
+                        "action": "updated",
+                        "reason": "downloaded and file updated"
+                    })
+                else:
+                    logging.error("Failed to download/update uid=%s to version %s", uid, latest_version)
+                    errors += 1
+                    eval_results.append({
+                        "uid": uid,
+                        "current": current_version,
+                        "latest": latest_version,
+                        "action": "error",
+                        "reason": "download failed"
+                    })
             else:
-                skipped_apps.append(f"{uid}_{app.get('version')}")
+                logging.info("Up-to-date: uid=%s version=%s", uid, current_version)
+                up_to_date += 1
+                skipped_apps.append(f"{uid}_{current_version}")
+                eval_results.append({
+                    "uid": uid,
+                    "current": current_version,
+                    "latest": latest_version,
+                    "action": "skip",
+                    "reason": "already up-to-date"
+                })
 
+        # Summary logging
+        logging.info("Summary: total=%d, to_update=%d, up_to_date=%d, errors=%d", total_apps, to_update, up_to_date, errors)
         logging.info("Downloaded apps: %s", downloaded_apps)
         logging.info("Skipped apps: %s", skipped_apps)
+
+        # Optional summary table
+        if args.summary:
+            def _fmt(s, w):
+                s = "" if s is None else str(s)
+                return s[:w].ljust(w)
+            headers = [
+                ("UID", 8),
+                ("Current", 12),
+                ("Latest", 12),
+                ("Action", 12),
+                ("Reason", 30),
+            ]
+            line = " ".join(_fmt(h, w) for h, w in headers)
+            sep = "-" * len(line)
+            print(sep)
+            print(line)
+            print(sep)
+            for row in eval_results:
+                print(" ".join([
+                    _fmt(row.get("uid"), 8),
+                    _fmt(row.get("current"), 12),
+                    _fmt(row.get("latest"), 12),
+                    _fmt(row.get("action"), 12),
+                    _fmt(row.get("reason"), 30),
+                ]))
+            print(sep)
+            print(f"Total: {total_apps} | To update: {to_update} | Up-to-date: {up_to_date} | Errors: {errors}")
+
+        # Optional JSON report
+        if args.report_file:
+            try:
+                report_path = Path(args.report_file)
+                with report_path.open("w", encoding="utf-8") as rf:
+                    json.dump({
+                        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+                        "summary": {
+                            "total": total_apps,
+                            "to_update": to_update,
+                            "up_to_date": up_to_date,
+                            "errors": errors,
+                        },
+                        "results": eval_results,
+                    }, rf, indent=2, ensure_ascii=False)
+                logging.info("Wrote report to %s", report_path)
+            except Exception as e:
+                logging.error("Failed to write report file: %s", e)
 
     except Exception as e:
         logging.exception("An error occurred: %s", e)
