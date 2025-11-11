@@ -1456,3 +1456,4 @@ if __name__ == "__main__":
         # Exit with error code if --fail-on-errors is set
         if hasattr(args, 'fail_on_errors') and args.fail_on_errors:
             sys.exit(1)
+

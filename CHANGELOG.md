@@ -106,3 +106,4 @@ None - all changes are backward compatible.
 - Backups are now enabled by default (5 most recent)
 - Use `--backup-keep 0` to disable if needed
 - All backup files are automatically ignored in `.gitignore`
+

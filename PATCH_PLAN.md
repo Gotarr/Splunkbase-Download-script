@@ -228,4 +228,3 @@ Rollback: Nur Doku
 - Kleine, isolierte Commits pro Teilaufgabe
 - Automatisierte Tests wenn möglich (pytest)
 - Keine Secrets einchecken (siehe `.gitignore`)
-
