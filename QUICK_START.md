@@ -4,7 +4,7 @@
 
 ### Step 1: Download the Script
 ```bash
-git clone <repository-url>
+git clone [<repository-url>](https://github.com/Gotarr/Splunkbase-Download-script.git)
 cd Splunkbase-Download-script
 ```
 
