@@ -11,6 +11,9 @@ Your_apps.json
 downloads/
 *.tgz
 
+# Logs
+download.log
+
 # Cache files
 splunkbase_catalog.json
 

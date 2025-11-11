@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.0] - 2025-11-11
+
+### Added
+- Automatic download directory detection: when `--outdir` is not specified, the script reads the last "Output Directory" from `download.log` and uses it automatically. A clear info message is shown: `[INFO] Using last download directory from log: C:\...\downloads`.
+- Download session logging: each run appends to `download.log` with a timestamped session header, the resolved output directory, and all downloaded files with full paths.
+
+### Changed
+- Catalog fetching now paginates (limit=100, offset loop) to retrieve the full Splunkbase catalog instead of the first page only.
+- Catalog cache duration increased from 24 hours to 96 hours.
+- Startup output clarifies the active configuration, including absolute output directory and path to `download.log`.
+- Improved messaging when an app is up-to-date but the file is missing: now reports `up-to-date but file missing (use --fix-missing)` with a warning.
+
+### Fixed
+- Validation and checks previously failed to find already-downloaded files when they were in a prior downloads directory and `--outdir` was omitted; resolved by automatic directory detection.
+- `Your_apps.json` is now auto-created as an empty array when missing, preventing `FileNotFoundError` during first run or onboarding.
+- Clearer guidance for `UnicodeDecodeError` when files were created as UTF-16 (e.g., via PowerShell `echo`), including suggestions to recreate with UTF-8.
+
+---
+
 ## [2.0.0] - 2025-11-11
 
 ### Added
