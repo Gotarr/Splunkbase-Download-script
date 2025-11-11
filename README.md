@@ -4,6 +4,54 @@
 
 Python script for automated, robust downloading of Splunk Apps from Splunkbase. Cross-platform (Windows/Linux), with secure credential handling and atomic updates.
 
+---
+
+**🚀 New User?** See [QUICK_START.md](QUICK_START.md) for a step-by-step guide!
+
+---
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### 2. Create Configuration Files
+
+```bash
+# Copy example files
+cp login.json.example login.json
+cp Your_apps.json.example Your_apps.json
+
+# Edit login.json with your Splunkbase credentials
+# Edit Your_apps.json with the apps you want to manage
+```
+
+**Or use interactive onboarding** (recommended for first-time users):
+
+```bash
+# Add apps interactively
+python splunkbase-download.py --onboard
+
+# Import from existing .tgz files
+python splunkbase-download.py --onboard --from-files /path/to/apps/
+
+# Or from a text file listing filenames
+python splunkbase-download.py --onboard --from-files apps.txt
+```
+
+### 3. Download Apps
+
+```bash
+# Download/update all apps
+python splunkbase-download.py
+
+# Dry-run to see what would be updated
+python splunkbase-download.py --dry-run --summary
+```
+
 ## Features
 
 - Download Splunkbase apps listed in `Your_apps.json`
@@ -28,28 +76,33 @@ python -m pip install -r requirements.txt
 ```
 
 Minimum required packages:
-- requests
-- urllib3
-- pytest (for running tests)
+- `requests` - HTTP library for downloads
+- `urllib3` - HTTP connection pooling
+- `pytest` - (optional) For running tests
 
-## Setup
+## Configuration Files
 
-You need two files:
+The script uses two configuration files:
 
-- `login.json`: Stores your Splunkbase credentials
-- `Your_apps.json`: Lists the apps to download (fields: `uid`, `version`, etc.)
+### `login.json` - Splunkbase Credentials
 
-### Option 1: Manual Setup
+**Template available:** `login.json.example`
 
-Example `login.json`:
 ```json
 {
-    "username": "your_splunkbase_username_or_email",
-    "password": "your_splunkbase_password"
+    "username": "your-splunkbase-username",
+    "password": "your-splunkbase-password"
 }
 ```
 
-Example `Your_apps.json`:
+**Security note:** This file is in `.gitignore` and should never be committed to version control.
+
+**Alternative:** Use `--prompt-login` to enter credentials interactively each time.
+
+### `Your_apps.json` - App List
+
+**Template available:** `Your_apps.json.example`
+
 ```json
 [
   {
@@ -238,16 +291,67 @@ Example report structure:
 ### Advanced Usage
 
 #### Process specific apps only
-```powershell
-# Coming soon: --only flag
-python .\splunkbase-download.py --only 742,833 --outdir .\downloads
+```bash
+# Process only specific UIDs
+python splunkbase-download.py --only 742,833 --dry-run --summary
 ```
 
 #### Exclude specific apps
-```powershell
-# Coming soon: --exclude flag
-python .\splunkbase-download.py --exclude 1621 --outdir .\downloads
+```bash
+# Skip specific UIDs from processing
+python splunkbase-download.py --exclude 1621 --outdir ./downloads
 ```
+
+#### Calculate file hashes
+```bash
+# Include SHA256 hashes in reports (useful for verification)
+python splunkbase-download.py --dry-run --hash --report-file report.json
+```
+
+#### Fix missing files
+```bash
+# Re-download files that are declared but missing locally
+python splunkbase-download.py --fix-missing
+
+# Dry-run to see what would be re-downloaded
+python splunkbase-download.py --fix-missing --dry-run --summary
+```
+
+#### Filter and validate
+```bash
+# Validate only specific apps
+python splunkbase-download.py --validate --only 742,1621 --summary
+
+# Exclude apps from validation
+python splunkbase-download.py --validate --exclude 1809
+```
+
+## Command-Line Flags
+
+### Core Options
+- `--outdir PATH` / `-o PATH` - Output directory for downloaded apps (default: current directory)
+- `--dry-run` - Check for updates without downloading
+- `--verbose` / `-v` - Enable detailed logging
+- `--prompt-login` - Prompt for credentials instead of using `login.json`
+- `--summary` - Print concise summary table
+- `--report-file PATH` - Write JSON report with detailed results
+
+### Validation & Quality
+- `--validate` - Validate `Your_apps.json` schema and consistency
+- `--format-json` - Reformat `Your_apps.json` with consistent formatting
+- `--hash` - Calculate SHA256 hashes for files (includes in reports)
+
+### App Management
+- `--onboard` - Interactive mode to add apps by UID
+- `--from-files PATH` - With `--onboard`: import apps from TGZ filenames or directory
+- `--fix-missing` - Re-download files that are declared but missing
+- `--fix-missing-upgrade` - (Reserved for future use)
+
+### Filtering
+- `--only UIDS` - Process only specified UIDs (comma-separated, e.g., `742,833,1621`)
+- `--exclude UIDS` - Exclude specified UIDs from processing (comma-separated)
+
+**Note:** Filters (`--only`/`--exclude`) work in all modes: normal, dry-run, validate, fix-missing
 
 ## Running Tests
 

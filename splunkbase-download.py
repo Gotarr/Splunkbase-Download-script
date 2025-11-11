@@ -2,7 +2,7 @@
 ####################################
 #### Splunkbase Download Script
 #### Erstellung: 10.11.2025
-#### letzte Änderung: 10.11.2025
+#### letzte Änderung: 11.11.2025
 #### Creator: Gotarr
 ####################################
 
@@ -12,6 +12,7 @@ import json
 import tempfile
 import datetime
 import os
+import hashlib
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
@@ -19,7 +20,7 @@ from urllib3.util.retry import Retry
 from email.utils import parsedate_to_datetime
 import logging
 import getpass
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import re
 import sys
 
@@ -187,6 +188,78 @@ def expected_file_path(out_dir: Path, uid: int, version: str) -> Path:
 def check_file_present(out_dir: Path, uid: int, version: str) -> Tuple[bool, Path]:
     p = expected_file_path(out_dir, uid, version)
     return p.exists(), p
+
+
+def calculate_sha256(file_path: Path) -> Optional[str]:
+    """Calculate SHA256 hash of a file.
+    
+    Args:
+        file_path: Path to the file to hash
+        
+    Returns:
+        Hex string of SHA256 hash, or None if file doesn't exist or error occurs
+    """
+    if not file_path.exists():
+        return None
+    
+    try:
+        sha256_hash = hashlib.sha256()
+        with file_path.open("rb") as f:
+            # Read in 64KB chunks for memory efficiency
+            for chunk in iter(lambda: f.read(65536), b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        logging.warning("Failed to calculate hash for %s: %s", file_path, e)
+        return None
+
+
+def add_hash_if_enabled(result_dict: Dict[str, Any], file_path: Path, calculate_hash: bool) -> Dict[str, Any]:
+    """Add SHA256 hash to result dictionary if hash calculation is enabled and file exists.
+    
+    Args:
+        result_dict: The result dictionary to potentially add hash to
+        file_path: Path to the file to hash
+        calculate_hash: Whether hash calculation is enabled (from args.hash)
+        
+    Returns:
+        The same dictionary with 'sha256' field added if applicable
+    """
+    if calculate_hash:
+        hash_value = calculate_sha256(file_path)
+        result_dict["sha256"] = hash_value
+    return result_dict
+
+
+def create_eval_result(uid, current, latest, action, reason, file_present, file_path_str, file_hash=None, include_hash=False):
+    """Helper to create eval result dict with optional hash field.
+    
+    Args:
+        uid: App UID
+        current: Current version
+        latest: Latest version
+        action: Action to take
+        reason: Reason for action
+        file_present: Whether file exists
+        file_path_str: File path as string
+        file_hash: Optional SHA256 hash
+        include_hash: Whether to include hash field (from args.hash)
+        
+    Returns:
+        Dictionary for eval_results
+    """
+    result = {
+        "uid": uid,
+        "current": current,
+        "latest": latest,
+        "action": action,
+        "reason": reason,
+        "file_present": file_present,
+        "file_path": file_path_str,
+    }
+    if include_hash:
+        result["sha256"] = file_hash
+    return result
 
 
 def validate_apps_data(apps_data: Any) -> Tuple[List[Dict[str, Any]], int, int]:
@@ -405,6 +478,87 @@ def get_latest_version_safe(uid, cookies, session=None):
         return None
 
 
+def fetch_splunkbase_catalog(cookies, session=None, cache_file="splunkbase_catalog.json", max_age_hours=24):
+    """Fetch complete Splunkbase app catalog and cache it locally.
+    Returns dict: {normalized_name: {"uid": int, "title": str, "appid": str}, ...}
+    Uses cache if younger than max_age_hours.
+    """
+    cache_path = Path(cache_file)
+    sess = session or requests
+    
+    # Check cache freshness
+    if cache_path.exists():
+        try:
+            stat = cache_path.stat()
+            age_hours = (datetime.datetime.now().timestamp() - stat.st_mtime) / 3600
+            if age_hours < max_age_hours:
+                with cache_path.open("r", encoding="utf-8") as f:
+                    catalog = json.load(f)
+                logging.info("Using cached Splunkbase catalog (%.1f hours old, %d apps)", age_hours, len(catalog))
+                return catalog
+        except Exception as e:
+            logging.warning("Could not read catalog cache: %s", e)
+    
+    # Fetch from API
+    logging.info("Fetching Splunkbase app catalog (this may take a moment)...")
+    url = "https://splunkbase.splunk.com/api/v1/app/"
+    catalog = {}
+    
+    try:
+        # Try without pagination first - get all available
+        resp = sess.get(url, cookies=cookies, timeout=60)
+        
+        if resp.status_code != 200:
+            logging.error("Failed to fetch catalog: HTTP %s", resp.status_code)
+            return {}
+        
+        data = resp.json()
+        
+        # Handle both list response and paginated response
+        apps_list = []
+        if isinstance(data, dict) and "results" in data:
+            apps_list = data.get("results", [])
+        elif isinstance(data, list):
+            apps_list = data
+        
+        if not apps_list:
+            logging.warning("Empty catalog response from Splunkbase API")
+            return {}
+        
+        for app in apps_list:
+            if not isinstance(app, dict):
+                continue
+            
+            uid = app.get("uid")
+            title = app.get("title", "").strip()
+            appid = app.get("appid", "").strip()
+            
+            if uid and title:
+                # Normalize name for fuzzy matching
+                normalized = title.lower().replace("-", "").replace("_", "").replace(" ", "")
+                catalog[normalized] = {
+                    "uid": int(uid),
+                    "title": title,
+                    "appid": appid,
+                }
+        
+        logging.info("Fetched %d apps from Splunkbase", len(catalog))
+        
+        # Write cache
+        try:
+            with cache_path.open("w", encoding="utf-8") as f:
+                json.dump(catalog, f, indent=2, ensure_ascii=False)
+            logging.info("Saved catalog cache to %s", cache_file)
+        except Exception as e:
+            logging.warning("Could not write catalog cache: %s", e)
+        
+        return catalog
+        
+    except Exception as e:
+        logging.error("Error fetching Splunkbase catalog: %s", e)
+        return {}
+
+
 def get_app_details(uid, cookies, session=None):
     """Retrieve app metadata from Splunkbase API.
     Returns dict with name, appid, uid, version (latest), updated_time or None on error.
@@ -477,13 +631,14 @@ def load_app_name_mapping():
     return mapping
 
 
-def search_app_by_name(app_name, cookies, session=None):
+def search_app_by_name(app_name, cookies, session=None, catalog=None):
     """Search Splunkbase for an app by name and return UID if found.
     Returns dict with uid, name, appid, version or None if not found.
+    Uses catalog cache if provided for fast lookup.
     """
     # First try local mapping file
     mapping = load_app_name_mapping()
-    normalized = app_name.lower().replace("-", "").replace("_", "")
+    normalized = app_name.lower().replace("-", "").replace("_", "").replace(" ", "")
     
     if normalized in mapping:
         uid = mapping[normalized]
@@ -491,6 +646,26 @@ def search_app_by_name(app_name, cookies, session=None):
         details = get_app_details(uid, cookies, session=session)
         if details:
             return details
+    
+    # Second: try catalog cache
+    if catalog:
+        # Try exact normalized match
+        if normalized in catalog:
+            entry = catalog[normalized]
+            uid = entry["uid"]
+            logging.info("Found UID %s for '%s' in catalog cache", uid, app_name)
+            details = get_app_details(uid, cookies, session=session)
+            if details:
+                return details
+        
+        # Try fuzzy match (substring search)
+        for cat_name, entry in catalog.items():
+            if normalized in cat_name or cat_name in normalized:
+                uid = entry["uid"]
+                logging.info("Found UID %s for '%s' via fuzzy match in catalog ('%s')", uid, app_name, entry["title"])
+                details = get_app_details(uid, cookies, session=session)
+                if details:
+                    return details
     
     # Fallback: Try direct API search (may not work for all Splunkbase instances)
     url = "https://splunkbase.splunk.com/api/v1/app/"
@@ -603,22 +778,22 @@ def onboard_apps_from_files(file_source, session=None):
         try:
             with source_path.open("r", encoding="utf-8") as f:
                 filenames = [line.strip() for line in f if line.strip()]
-            print(f"✓ Read {len(filenames)} filename(s) from {source_path}")
+            print(f"[OK] Read {len(filenames)} filename(s) from {source_path}")
         except Exception as e:
             logging.error("Failed to read file %s: %s", source_path, e)
-            print(f"✗ Error reading {source_path}: {e}")
+            print(f"[X] Error reading {source_path}: {e}")
             return
     elif source_path.is_dir():
         # Scan directory for .tgz files
         try:
             filenames = [f.name for f in source_path.glob("*.tgz")]
-            print(f"✓ Found {len(filenames)} .tgz file(s) in {source_path}")
+            print(f"[OK] Found {len(filenames)} .tgz file(s) in {source_path}")
         except Exception as e:
             logging.error("Failed to scan directory %s: %s", source_path, e)
-            print(f"✗ Error scanning {source_path}: {e}")
+            print(f"[X] Error scanning {source_path}: {e}")
             return
     else:
-        print(f"✗ {source_path} is neither a file nor a directory")
+        print(f"[X] {source_path} is neither a file nor a directory")
         return
     
     if not filenames:
@@ -632,13 +807,13 @@ def onboard_apps_from_files(file_source, session=None):
         if app_name:
             apps_to_search.append((fname, app_name, version))
         else:
-            print(f"⚠ Could not parse filename: {fname}")
+            print(f"[!] Could not parse filename: {fname}")
     
     if not apps_to_search:
-        print("✗ No valid filenames to process (expected format: app-name_version.tgz)")
+        print("[X] No valid filenames to process (expected format: app-name_version.tgz)")
         return
     
-    print(f"✓ Parsed {len(apps_to_search)} app filename(s)")
+    print(f"[OK] Parsed {len(apps_to_search)} app filename(s)")
     
     # Check against existing
     apps_file = Path("Your_apps.json")
@@ -657,6 +832,10 @@ def onboard_apps_from_files(file_source, session=None):
     
     # Authenticate and search
     cookies = authenticate(session=session, prompt=False)
+    
+    # Fetch catalog for name → UID lookups
+    catalog = fetch_splunkbase_catalog(cookies, session=session)
+    
     print(f"\nSearching Splunkbase for {len(apps_to_search)} app(s)...\n")
     
     new_apps = []
@@ -664,23 +843,23 @@ def onboard_apps_from_files(file_source, session=None):
     for fname, app_name, version in apps_to_search:
         print(f"  '{app_name}' (from {fname})... ", end="", flush=True)
         
-        result = search_app_by_name(app_name, cookies, session=session)
+        result = search_app_by_name(app_name, cookies, session=session, catalog=catalog)
         if result:
             uid = result.get("uid")
             name = result.get("name")
             
             if uid in existing_uids:
-                print(f"⚠ Already exists (UID {uid})")
+                print(f"[!] Already exists (UID {uid})")
                 continue
             
             if uid in added_uids:
-                print(f"⚠ Duplicate in this batch (UID {uid})")
+                print(f"[!] Duplicate in this batch (UID {uid})")
                 continue
             
             # Get latest version and metadata
             latest_version = get_latest_version_safe(uid, cookies, session=session)
             if not latest_version:
-                print(f"✗ Found UID {uid} but no version available")
+                print(f"[X] Found UID {uid} but no version available")
                 continue
             
             updated_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
@@ -693,12 +872,12 @@ def onboard_apps_from_files(file_source, session=None):
                 "version": latest_version,
             })
             added_uids.add(uid)
-            print(f"✓ {name} (UID {uid}, v{latest_version})")
+            print(f"[OK] {name} (UID {uid}, v{latest_version})")
         else:
-            print("✗ Not found")
+            print("[X] Not found")
     
     if not new_apps:
-        print("\n✗ No new apps to add. Your_apps.json not modified.")
+        print("\n[X] No new apps to add. Your_apps.json not modified.")
         return
     
     # Merge and write
@@ -707,13 +886,13 @@ def onboard_apps_from_files(file_source, session=None):
     
     try:
         atomic_write_json(apps_file, formatted)
-        print(f"\n✓ Successfully added {len(new_apps)} app(s) to Your_apps.json")
+        print(f"\n[OK] Successfully added {len(new_apps)} app(s) to Your_apps.json")
         print("\nAdded apps:")
         for app in new_apps:
             print(f"  - {app['name']} (UID {app['uid']}, v{app['version']})")
     except Exception as e:
         logging.error("Failed to write Your_apps.json: %s", e)
-        print(f"\n✗ Error writing Your_apps.json: {e}")
+        print(f"\n[X] Error writing Your_apps.json: {e}")
 
 
 
@@ -758,14 +937,14 @@ def onboard_apps_interactive(session=None):
                 try:
                     uid = int(p)
                     if uid in existing_uids:
-                        print(f"  ⚠ UID {uid} already exists in Your_apps.json, skipping.")
+                        print(f"  [!] UID {uid} already exists in Your_apps.json, skipping.")
                     elif uid in uids_to_add:
-                        print(f"  ⚠ UID {uid} already queued, skipping duplicate.")
+                        print(f"  [!] UID {uid} already queued, skipping duplicate.")
                     else:
                         uids_to_add.append(uid)
-                        print(f"  ✓ Queued UID {uid}")
+                        print(f"  [OK] Queued UID {uid}")
                 except ValueError:
-                    print(f"  ✗ Invalid UID: {p}")
+                    print(f"  [X] Invalid UID: {p}")
         except (EOFError, KeyboardInterrupt):
             print("\nOnboarding cancelled.")
             return
@@ -781,9 +960,9 @@ def onboard_apps_interactive(session=None):
         details = get_app_details(uid, cookies, session=session)
         if details:
             new_apps.append(details)
-            print(f"✓ {details['name']} v{details['version']}")
+            print(f"[OK] {details['name']} v{details['version']}")
         else:
-            print("✗ Failed")
+            print("[X] Failed")
     
     if not new_apps:
         print("No valid apps retrieved. Your_apps.json not modified.")
@@ -796,13 +975,40 @@ def onboard_apps_interactive(session=None):
     # Atomic write
     try:
         atomic_write_json(apps_file, formatted)
-        print(f"\n✓ Successfully added {len(new_apps)} app(s) to Your_apps.json")
+        print(f"\n[OK] Successfully added {len(new_apps)} app(s) to Your_apps.json")
         print("Added apps:")
         for app in new_apps:
             print(f"  - {app['name']} (UID {app['uid']}, v{app['version']})")
     except Exception as e:
         logging.error("Failed to write Your_apps.json: %s", e)
-        print(f"✗ Error writing Your_apps.json: {e}")
+        print(f"[X] Error writing Your_apps.json: {e}")
+
+
+def parse_uid_list(uid_string: str) -> set:
+    """Parse a comma-separated string of UIDs into a set of integers.
+    
+    Args:
+        uid_string: Comma-separated UID string (e.g., "742,833,1621")
+        
+    Returns:
+        Set of integer UIDs
+        
+    Raises:
+        ValueError: If any UID is not a valid integer
+    """
+    if not uid_string or not uid_string.strip():
+        return set()
+    
+    uids = set()
+    for part in uid_string.split(','):
+        part = part.strip()
+        if part:
+            try:
+                uids.add(int(part))
+            except ValueError:
+                raise ValueError(f"Invalid UID '{part}' - must be an integer")
+    return uids
+
 
 if __name__ == "__main__":
     try:
@@ -817,6 +1023,9 @@ if __name__ == "__main__":
         parser.add_argument("--format-json", action="store_true", help="Rewrite Your_apps.json with consistent formatting (pretty, key order)")
         parser.add_argument("--fix-missing", action="store_true", help="If an app is up-to-date but its declared file is missing, re-download it (or plan it in dry-run)")
         parser.add_argument("--fix-missing-upgrade", action="store_true", help="Reserved for future: no effect now; upgrades already occur when newer versions exist")
+        parser.add_argument("--only", metavar="UIDS", help="Process only the specified UIDs (comma-separated, e.g., --only 742,833,1621)")
+        parser.add_argument("--exclude", metavar="UIDS", help="Exclude the specified UIDs from processing (comma-separated, e.g., --exclude 1809)")
+        parser.add_argument("--hash", action="store_true", help="Calculate SHA256 hash for existing .tgz files and include in report")
         parser.add_argument("--onboard", action="store_true", help="Interactive mode: add new apps to Your_apps.json by UID; fetches metadata from Splunkbase")
         parser.add_argument("--from-files", metavar="PATH", help="With --onboard: extract UIDs from .tgz filenames in a directory or text file (one filename per line)")
         args = parser.parse_args()
@@ -848,12 +1057,28 @@ if __name__ == "__main__":
 
         # Phase 1 + Phase 2 (validate + file mismatch in validate mode)
         if args.validate:
+            # Parse UID filters (same as normal mode)
+            only_uids = parse_uid_list(args.only) if args.only else None
+            exclude_uids = parse_uid_list(args.exclude) if args.exclude else None
+            
+            if only_uids:
+                logging.info("Validating only UIDs: %s", sorted(only_uids))
+            if exclude_uids:
+                logging.info("Excluding UIDs from validation: %s", sorted(exclude_uids))
+            
             results, error_count, warning_count = validate_apps_data(apps_data_from_file)
             out_dir = Path(args.outdir)
             eval_results: List[Dict[str, Any]] = []
             missing_files = 0
             for r in results:
                 uid_val = r.get("uid")
+                
+                # Apply UID filters in validate mode
+                if only_uids is not None and uid_val not in only_uids:
+                    continue
+                if exclude_uids is not None and uid_val in exclude_uids:
+                    continue
+                
                 file_present = None
                 file_path_str = None
                 declared_version = None
@@ -938,6 +1163,15 @@ if __name__ == "__main__":
 
         cookies = authenticate(session=session, prompt=args.prompt_login)
 
+        # Parse UID filters
+        only_uids = parse_uid_list(args.only) if args.only else None
+        exclude_uids = parse_uid_list(args.exclude) if args.exclude else None
+        
+        if only_uids:
+            logging.info("Processing only UIDs: %s", sorted(only_uids))
+        if exclude_uids:
+            logging.info("Excluding UIDs: %s", sorted(exclude_uids))
+
         downloaded_apps: List[str] = []
         skipped_apps: List[str] = []
         eval_results: List[Dict[str, Any]] = []
@@ -953,11 +1187,20 @@ if __name__ == "__main__":
                 logging.warning("Skipping entry without uid: %s", app)
                 continue
 
+            # Apply UID filters
+            if only_uids is not None and uid not in only_uids:
+                logging.debug("Skipping uid=%s (not in --only list)", uid)
+                continue
+            if exclude_uids is not None and uid in exclude_uids:
+                logging.debug("Skipping uid=%s (in --exclude list)", uid)
+                continue
+
             total_apps += 1
             current_version = app.get("version")
             # Phase 2: check for existing file of declared current version
             file_present = None
             file_path_str = None
+            file_hash = None
             if isinstance(uid, int) and isinstance(current_version, str):
                 fp, p = check_file_present(Path(args.outdir), uid, current_version)
                 file_present = fp
@@ -965,19 +1208,17 @@ if __name__ == "__main__":
                 if not fp:
                     missing_files += 1
                     logging.warning("Declared file missing: uid=%s version=%s expected=%s", uid, current_version, p)
+                elif args.hash:
+                    # Calculate hash only if file exists and --hash is enabled
+                    file_hash = calculate_sha256(p)
 
             latest_version = get_latest_version_safe(uid, cookies, session=session)
             if not latest_version:
                 logging.warning("Could not retrieve latest version for uid=%s (current=%s)", uid, current_version)
-                eval_results.append({
-                    "uid": uid,
-                    "current": current_version,
-                    "latest": None,
-                    "action": "error",
-                    "reason": "latest version not available",
-                    "file_present": file_present,
-                    "file_path": file_path_str,
-                })
+                eval_results.append(create_eval_result(
+                    uid, current_version, None, "error", "latest version not available",
+                    file_present, file_path_str, file_hash, args.hash
+                ))
                 errors += 1
                 skipped_apps.append(f"{uid}_{current_version}")
                 continue
@@ -988,42 +1229,30 @@ if __name__ == "__main__":
                 if args.dry_run:
                     logging.info("Dry-run: would download uid=%s version %s", uid, latest_version)
                     skipped_apps.append(f"{uid}_{current_version}")
-                    eval_results.append({
-                        "uid": uid,
-                        "current": current_version,
-                        "latest": latest_version,
-                        "action": "plan-update",
-                        "reason": "dry-run",
-                        "file_present": file_present,
-                        "file_path": file_path_str,
-                    })
+                    eval_results.append(create_eval_result(
+                        uid, current_version, latest_version, "plan-update", "dry-run",
+                        file_present, file_path_str, file_hash, args.hash
+                    ))
                     continue
 
                 updated_time = download_stream(uid, latest_version, cookies, downloaded_apps, skipped_apps, out_dir=out_dir, session=session)
                 if updated_time:
                     # Update file atomically
                     update_Your_apps_file_atomic(apps_data_from_file, uid, latest_version, updated_time, file_path=str(apps_file))
-                    eval_results.append({
-                        "uid": uid,
-                        "current": current_version,
-                        "latest": latest_version,
-                        "action": "updated",
-                        "reason": "downloaded and file updated",
-                        "file_present": True,
-                        "file_path": str(expected_file_path(Path(args.outdir), uid, latest_version)),
-                    })
+                    # After download, calculate hash of new file if --hash enabled
+                    new_file_path = expected_file_path(Path(args.outdir), uid, latest_version)
+                    new_file_hash = calculate_sha256(new_file_path) if args.hash else None
+                    eval_results.append(create_eval_result(
+                        uid, current_version, latest_version, "updated", "downloaded and file updated",
+                        True, str(new_file_path), new_file_hash, args.hash
+                    ))
                 else:
                     logging.error("Failed to download/update uid=%s to version %s", uid, latest_version)
                     errors += 1
-                    eval_results.append({
-                        "uid": uid,
-                        "current": current_version,
-                        "latest": latest_version,
-                        "action": "error",
-                        "reason": "download failed",
-                        "file_present": file_present,
-                        "file_path": file_path_str,
-                    })
+                    eval_results.append(create_eval_result(
+                        uid, current_version, latest_version, "error", "download failed",
+                        file_present, file_path_str, file_hash, args.hash
+                    ))
             else:
                 # Up-to-date relative to Splunkbase
                 if (file_present is False) and args.fix_missing:
@@ -1031,54 +1260,36 @@ if __name__ == "__main__":
                     if args.dry_run:
                         logging.info("Dry-run: would re-download missing file for uid=%s version=%s", uid, current_version)
                         skipped_apps.append(f"{uid}_{current_version}")
-                        eval_results.append({
-                            "uid": uid,
-                            "current": current_version,
-                            "latest": latest_version,
-                            "action": "plan-redownload",
-                            "reason": "missing file",
-                            "file_present": False,
-                            "file_path": file_path_str,
-                        })
+                        eval_results.append(create_eval_result(
+                            uid, current_version, latest_version, "plan-redownload", "missing file",
+                            False, file_path_str, None, args.hash
+                        ))
                     else:
                         updated_time = download_stream(uid, current_version, cookies, downloaded_apps, skipped_apps, out_dir=out_dir, session=session)
                         if updated_time:
                             # Touch updated_time for the same version to reflect fresh download
                             update_Your_apps_file_atomic(apps_data_from_file, uid, current_version, updated_time, file_path=str(apps_file))
-                            eval_results.append({
-                                "uid": uid,
-                                "current": current_version,
-                                "latest": latest_version,
-                                "action": "redownloaded",
-                                "reason": "declared file was missing",
-                                "file_present": True,
-                                "file_path": str(expected_file_path(Path(args.outdir), uid, current_version)),
-                            })
+                            redownload_path = expected_file_path(Path(args.outdir), uid, current_version)
+                            redownload_hash = calculate_sha256(redownload_path) if args.hash else None
+                            eval_results.append(create_eval_result(
+                                uid, current_version, latest_version, "redownloaded", "declared file was missing",
+                                True, str(redownload_path), redownload_hash, args.hash
+                            ))
                         else:
                             logging.error("Failed to re-download missing file for uid=%s version=%s", uid, current_version)
                             errors += 1
-                            eval_results.append({
-                                "uid": uid,
-                                "current": current_version,
-                                "latest": latest_version,
-                                "action": "error",
-                                "reason": "redownload failed",
-                                "file_present": False,
-                                "file_path": file_path_str,
-                            })
+                            eval_results.append(create_eval_result(
+                                uid, current_version, latest_version, "error", "redownload failed",
+                                False, file_path_str, None, args.hash
+                            ))
                 else:
                     logging.info("Up-to-date: uid=%s version=%s", uid, current_version)
                     up_to_date += 1
                     skipped_apps.append(f"{uid}_{current_version}")
-                    eval_results.append({
-                        "uid": uid,
-                        "current": current_version,
-                        "latest": latest_version,
-                        "action": "skip",
-                        "reason": "already up-to-date",
-                        "file_present": file_present,
-                        "file_path": file_path_str,
-                    })
+                    eval_results.append(create_eval_result(
+                        uid, current_version, latest_version, "skip", "already up-to-date",
+                        file_present, file_path_str, file_hash, args.hash
+                    ))
 
         # Summary logging
         logging.info("Summary: total=%d, to_update=%d, up_to_date=%d, errors=%d", total_apps, to_update, up_to_date, errors)

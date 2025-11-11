@@ -1,9 +1,15 @@
 # Credentials
 login.json
 
+# User configuration
+Your_apps.json
+
 # Downloaded apps
 downloads/
 *.tgz
+
+# Cache files
+splunkbase_catalog.json
 
 # Python
 __pycache__/

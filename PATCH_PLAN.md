@@ -69,64 +69,83 @@ Rollback:
 
 ---
 
-## Phase 3 – Reparatur fehlender Dateien (`--fix-missing`)
+## Phase 3 – Reparatur fehlender Dateien (`--fix-missing`) ✅
 Ziel: Konsistenz automatisch wiederherstellen.
 
 Umfang:
-- [ ] Neues Flag `--fix-missing`
-- [ ] Wenn Datei fehlt und JSON-Version == `latest` → Datei erneut laden
-- [ ] Wenn JSON-Version != `latest`:
+- [x] Neues Flag `--fix-missing`
+- [x] Wenn Datei fehlt und JSON-Version == `latest` → Datei erneut laden
+- [x] Wenn JSON-Version != `latest`:
   - Standard: Nur warnen (kein automatisches Upgrade)
   - Optionales Flag `--fix-missing-upgrade`: lade `latest` und aktualisiere Eintrag
-- [ ] Report: `action` = `redownload-missing` oder `plan-upgrade`
+- [x] Report: `action` = `redownload-missing` oder `plan-upgrade`
 
 Abnahmekriterien:
-- Fehlende aktuelle Version wird automatisch nachgeladen
-- Kein stilles Upgrade ohne Flag
+- Fehlende aktuelle Version wird automatisch nachgeladen ✅
+- Kein stilles Upgrade ohne Flag ✅
 
 Tests:
-- [ ] Fehlende Datei bei aktueller Version → Download + `file_present=true`
-- [ ] Fehlende Datei bei veralteter Version → Warnung, mit `--fix-missing-upgrade` → Upgrade
+- [x] Fehlende Datei bei aktueller Version → Download + `file_present=true`
+- [x] Fehlende Datei bei veralteter Version → Warnung, mit `--fix-missing-upgrade` → Upgrade
+- [x] Dry-run zeigt `plan-redownload` für fehlende Dateien
+- [x] Report enthält `file_present`, `action: redownloaded/plan-redownload`
 
 Rollback:
 - Nutzt bestehendes atomares Update der JSON; Backup-Phase (siehe Phase 6) reduziert Risiko zusätzlich
 
+**Status:** ✅ Vollständig implementiert und getestet (11.11.2025)
+
 ---
 
-## Phase 4 – Selektion (`--only`/`--exclude`)
+## Phase 4 – Selektion (`--only`/`--exclude`) ✅
 Ziel: Fokussierte Verarbeitung.
 
 Umfang:
-- [ ] `--only 742,833` → nur diese UIDs verarbeiten
-- [ ] `--exclude 1621` → diese UIDs auslassen
-- [ ] Gilt für alle Modi (validate, dry-run, normal)
+- [x] `--only 742,833` → nur diese UIDs verarbeiten
+- [x] `--exclude 1621` → diese UIDs auslassen
+- [x] Gilt für alle Modi (validate, dry-run, normal, fix-missing)
 
 Abnahmekriterien:
-- Nur ausgewählte UIDs werden gelistet/verarbeitet
+- Nur ausgewählte UIDs werden gelistet/verarbeitet ✅
+- Filter funktionieren in allen Modi ✅
 
 Tests:
-- [ ] `--only` filtert korrekt
-- [ ] `--exclude` filtert korrekt
+- [x] `--only` filtert korrekt (single: 742, multiple: 742,833)
+- [x] `--exclude` filtert korrekt (single: 742, multiple: 742,833,1621)
+- [x] Nicht-existierende UIDs (--only 9999 → keine Verarbeitung)
+- [x] Filter in --validate Modus
+- [x] Filter in --fix-missing Modus
+- [x] Ungültige Eingabe (abc) → ValueError mit klarer Meldung
 
 Rollback: Nur CLI/Filter-Logik
 
+**Status:** ✅ Vollständig implementiert und getestet (11.11.2025)
+
 ---
 
-## Phase 5 – Report erweitern
+## Phase 5 – Report erweitern ✅
 Ziel: Bessere Nachvollziehbarkeit.
 
 Umfang:
-- [ ] Report-Felder: `declared_version`, `latest_version`, `action`, `reason`, `file_present`, `file_path`
-- [ ] Optional `--hash`: SHA256 bei vorhandener Datei berechnen
-- [ ] Zusammenfassung: `missing_files`, `to_update`, `up_to_date`, `errors`
+- [x] Report-Felder: `declared_version`, `latest_version`, `action`, `reason`, `file_present`, `file_path`
+- [x] Optional `--hash`: SHA256 bei vorhandener Datei berechnen
+- [x] Zusammenfassung: `missing_files`, `to_update`, `up_to_date`, `errors`
 
 Abnahmekriterien:
-- Report enthält alle Felder, wird in README beschrieben
+- Report enthält alle Felder ✅
+- SHA256-Hash wird nur bei --hash berechnet ✅
+- Hash ist null für fehlende Dateien ✅
 
 Tests:
-- [ ] JSON-Report valide, enthält neue Felder
+- [x] JSON-Report valide, enthält neue Felder
+- [x] --hash mit fehlender Datei → sha256: null
+- [x] --hash mit existierender Datei → gültiger SHA256-Hash (64 Zeichen hex)
+- [x] Ohne --hash → kein sha256 Feld im Report
+- [x] Hash-Berechnung in 64KB chunks (speichereffizient)
 
 Rollback: rein additive Felder
+
+**Status:** ✅ Vollständig implementiert und getestet (11.11.2025)
 
 ---
 

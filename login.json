@@ -1,4 +1,4 @@
 {
-    "username": "your_splunkbase_username_or_email",
-    "password": "your_splunkbase_password"
+    "username": "your-splunkbase-username",
+    "password": "your-splunkbase-password"
 }
