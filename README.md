@@ -2,6 +2,9 @@
 
 # Splunkbase-Download-script
 
+[![GitHub release](https://img.shields.io/github/v/release/Gotarr/Splunkbase-Download-script)](https://github.com/Gotarr/Splunkbase-Download-script/releases/latest)
+[![License](https://img.shields.io/github/license/Gotarr/Splunkbase-Download-script)](LICENSE)
+
 Python script for automated, robust downloading of Splunk Apps from Splunkbase. Cross-platform (Windows/Linux), with secure credential handling and atomic updates.
 
 ---
@@ -205,6 +208,42 @@ python3 ./splunkbase-download.py -o ./downloads
 # Or make executable:
 chmod +x ./splunkbase-download.py
 ./splunkbase-download.py -o ./downloads
+```
+
+**Download behavior:**
+- Apps are saved as `<UID>_<VERSION>.tgz` (e.g., `742_9.1.1.tgz`)
+- Default output directory: current directory (`.`)
+- Specify custom directory with `--outdir` or `-o`
+- **Automatic directory detection**: If `--outdir` is not specified, the script automatically uses the last download directory from `download.log`
+- Download log: `download.log` in output directory (tracks all downloads with timestamps)
+- Script displays absolute paths at startup for clarity
+
+**Smart directory behavior:**
+- First download: Uses current directory (or `--outdir` if specified)
+- Subsequent operations: Automatically uses last download directory from log
+- Override anytime: Specify `--outdir` to use a different directory
+- Works with all operations: `--validate`, `--fix-missing`, `--hash`, etc.
+
+**Example output:**
+```
+=== Download Configuration ===
+Output directory: C:\Users\...\downloads
+Apps will be saved as: <UID>_<VERSION>.tgz
+Download log: C:\Users\...\downloads\download.log
+==============================
+```
+
+**Example: Automatic directory detection**
+```powershell
+# First download to specific directory
+python .\splunkbase-download.py --outdir .\downloads
+
+# Later validation - no need to specify --outdir again!
+python .\splunkbase-download.py --validate --summary
+# Output: [INFO] Using last download directory from log: C:\...\downloads
+
+# Fix missing files - uses remembered directory automatically
+python .\splunkbase-download.py --fix-missing
 ```
 
 ### Interactive Login
@@ -439,9 +478,15 @@ pytest -q
 ### Missing Files
 
 **Problem:** `file_present: false` in reports
+- **First**: Try running `--validate` without `--outdir` - the script automatically uses the last download directory from `download.log`
 - Use `--fix-missing` to automatically re-download missing files
 - Run `--validate --summary` to see which files are missing
-- Ensure `--outdir` points to the correct directory
+- If automatic detection doesn't work, manually specify `--outdir` to point to the correct directory
+
+**Tip:** The script shows which directory it's checking:
+```
+[INFO] Using last download directory from log: C:\...\downloads
+```
 
 ### Backup & Recovery
 

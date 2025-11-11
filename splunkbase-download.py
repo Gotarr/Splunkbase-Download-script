@@ -571,10 +571,10 @@ def get_latest_version_safe(uid, cookies, session=None):
         return None
 
 
-def fetch_splunkbase_catalog(cookies, session=None, cache_file="splunkbase_catalog.json", max_age_hours=24):
+def fetch_splunkbase_catalog(cookies, session=None, cache_file="splunkbase_catalog.json", max_age_hours=96):
     """Fetch complete Splunkbase app catalog and cache it locally.
     Returns dict: {normalized_name: {"uid": int, "title": str, "appid": str}, ...}
-    Uses cache if younger than max_age_hours.
+    Uses cache if younger than max_age_hours (default: 96 hours = 4 days).
     """
     cache_path = Path(cache_file)
     sess = session or requests
@@ -598,42 +598,66 @@ def fetch_splunkbase_catalog(cookies, session=None, cache_file="splunkbase_catal
     catalog = {}
     
     try:
-        # Try without pagination first - get all available
-        resp = sess.get(url, cookies=cookies, timeout=60)
+        # Fetch with pagination to get all apps
+        offset = 0
+        limit = 100  # Request 100 apps per page
+        total_fetched = 0
         
-        if resp.status_code != 200:
-            logging.error("Failed to fetch catalog: HTTP %s", resp.status_code)
-            return {}
-        
-        data = resp.json()
-        
-        # Handle both list response and paginated response
-        apps_list = []
-        if isinstance(data, dict) and "results" in data:
-            apps_list = data.get("results", [])
-        elif isinstance(data, list):
-            apps_list = data
-        
-        if not apps_list:
-            logging.warning("Empty catalog response from Splunkbase API")
-            return {}
-        
-        for app in apps_list:
-            if not isinstance(app, dict):
-                continue
+        while True:
+            params = {"limit": limit, "offset": offset}
+            resp = sess.get(url, cookies=cookies, params=params, timeout=60)
             
-            uid = app.get("uid")
-            title = app.get("title", "").strip()
-            appid = app.get("appid", "").strip()
+            if resp.status_code != 200:
+                logging.error("Failed to fetch catalog: HTTP %s", resp.status_code)
+                break
             
-            if uid and title:
-                # Normalize name for fuzzy matching
-                normalized = title.lower().replace("-", "").replace("_", "").replace(" ", "")
-                catalog[normalized] = {
-                    "uid": int(uid),
-                    "title": title,
-                    "appid": appid,
-                }
+            data = resp.json()
+            
+            # Handle paginated response
+            apps_list = []
+            total_count = 0
+            
+            if isinstance(data, dict):
+                apps_list = data.get("results", [])
+                total_count = data.get("total", len(apps_list))
+            elif isinstance(data, list):
+                apps_list = data
+                total_count = len(apps_list)
+            
+            if not apps_list:
+                # No more results
+                break
+            
+            for app in apps_list:
+                if not isinstance(app, dict):
+                    continue
+                
+                uid = app.get("uid")
+                title = app.get("title", "").strip()
+                appid = app.get("appid", "").strip()
+                
+                if uid and title:
+                    # Normalize name for fuzzy matching
+                    normalized = title.lower().replace("-", "").replace("_", "").replace(" ", "")
+                    catalog[normalized] = {
+                        "uid": int(uid),
+                        "title": title,
+                        "appid": appid,
+                    }
+            
+            total_fetched += len(apps_list)
+            logging.debug("Fetched %d apps (offset %d)", len(apps_list), offset)
+            
+            # Check if we got all apps
+            if total_count > 0 and total_fetched >= total_count:
+                break
+            
+            # Check if we got less than limit (last page)
+            if len(apps_list) < limit:
+                break
+            
+            # Move to next page
+            offset += limit
         
         logging.info("Fetched %d apps from Splunkbase", len(catalog))
         
@@ -1103,6 +1127,44 @@ def parse_uid_list(uid_string: str) -> set:
     return uids
 
 
+def get_last_download_dir(default_dir: str = ".") -> str:
+    """Read the last used download directory from download.log.
+    
+    Args:
+        default_dir: Default directory if log doesn't exist or can't be parsed
+        
+    Returns:
+        Last used download directory path, or default_dir if not found
+    """
+    # Check common locations for download.log
+    possible_logs = [
+        Path(default_dir) / "download.log",
+        Path("downloads") / "download.log",
+        Path(".") / "download.log",
+    ]
+    
+    for log_path in possible_logs:
+        if not log_path.exists():
+            continue
+        
+        try:
+            with log_path.open("r", encoding="utf-8") as f:
+                # Read file backwards to find last "Output Directory:" line
+                lines = f.readlines()
+                for line in reversed(lines):
+                    if line.startswith("Output Directory:"):
+                        # Extract path after "Output Directory: "
+                        dir_path = line.split("Output Directory:", 1)[1].strip()
+                        if Path(dir_path).exists():
+                            logging.debug("Found last download directory from %s: %s", log_path, dir_path)
+                            return dir_path
+        except Exception as e:
+            logging.debug("Could not read %s: %s", log_path, e)
+            continue
+    
+    return default_dir
+
+
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser(description="Download Splunkbase apps listed in Your_apps.json")
@@ -1124,6 +1186,13 @@ if __name__ == "__main__":
         parser.add_argument("--onboard", action="store_true", help="Interactive mode: add new apps to Your_apps.json by UID; fetches metadata from Splunkbase")
         parser.add_argument("--from-files", metavar="PATH", help="With --onboard: extract UIDs from .tgz filenames in a directory or text file (one filename per line)")
         args = parser.parse_args()
+
+        # If --outdir not explicitly set, try to use last download directory from log
+        if args.outdir == ".":
+            last_dir = get_last_download_dir(".")
+            if last_dir != ".":
+                args.outdir = last_dir
+                print(f"[INFO] Using last download directory from log: {last_dir}")
 
         # Set default for backup_keep if not specified
         if args.backup_keep is None:
@@ -1149,10 +1218,26 @@ if __name__ == "__main__":
 
         apps_file = Path("Your_apps.json")
         if not apps_file.exists():
-            raise FileNotFoundError("Your_apps.json not found")
+            logging.warning("Your_apps.json not found. Creating empty file.")
+            # Create empty apps list
+            with apps_file.open("w", encoding="utf-8") as f:
+                json.dump([], f, indent=4)
+            logging.info("Created empty Your_apps.json. Use --onboard to add apps.")
 
-        with apps_file.open("r", encoding="utf-8") as f:
-            apps_data_from_file = json.load(f)
+        # Load Your_apps.json with better error handling
+        try:
+            with apps_file.open("r", encoding="utf-8") as f:
+                apps_data_from_file = json.load(f)
+        except UnicodeDecodeError as e:
+            logging.error("Your_apps.json has invalid encoding. Expected UTF-8.")
+            logging.error("This can happen if the file was created with PowerShell 'echo' command.")
+            logging.error("Please delete Your_apps.json and run the script again, or use:")
+            logging.error("  '[\"[]\"]' | Out-File -Encoding utf8 Your_apps.json")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            logging.error("Your_apps.json contains invalid JSON: %s", e)
+            logging.error("Please fix the JSON syntax or delete the file to start fresh.")
+            sys.exit(1)
 
         # Phase 1 + Phase 2 (validate + file mismatch in validate mode)
         if args.validate:
@@ -1261,6 +1346,14 @@ if __name__ == "__main__":
         session.mount("http://", adapter)
 
         cookies = authenticate(session=session, prompt=args.prompt_login)
+
+        # Show download configuration
+        out_dir_abs = Path(args.outdir).absolute()
+        logging.info("=== Download Configuration ===")
+        logging.info("Output directory: %s", out_dir_abs)
+        logging.info("Apps will be saved as: <UID>_<VERSION>.tgz")
+        logging.info("Download log: %s", out_dir_abs / "download.log")
+        logging.info("==============================")
 
         # Parse UID filters
         only_uids = parse_uid_list(args.only) if args.only else None
@@ -1382,18 +1475,48 @@ if __name__ == "__main__":
                                 False, file_path_str, None, args.hash
                             ))
                 else:
-                    logging.info("Up-to-date: uid=%s version=%s", uid, current_version)
-                    up_to_date += 1
-                    skipped_apps.append(f"{uid}_{current_version}")
-                    eval_results.append(create_eval_result(
-                        uid, current_version, latest_version, "skip", "already up-to-date",
-                        file_present, file_path_str, file_hash, args.hash
-                    ))
+                    # Version is up-to-date, but check if file exists
+                    if file_present is False:
+                        # File missing but version is current - warn user
+                        logging.warning("Up-to-date but file missing: uid=%s version=%s (use --fix-missing to download)", uid, current_version)
+                        up_to_date += 1
+                        skipped_apps.append(f"{uid}_{current_version}")
+                        eval_results.append(create_eval_result(
+                            uid, current_version, latest_version, "skip", "up-to-date but file missing (use --fix-missing)",
+                            False, file_path_str, file_hash, args.hash
+                        ))
+                    else:
+                        # File exists and version is current
+                        logging.info("Up-to-date: uid=%s version=%s", uid, current_version)
+                        up_to_date += 1
+                        skipped_apps.append(f"{uid}_{current_version}")
+                        eval_results.append(create_eval_result(
+                            uid, current_version, latest_version, "skip", "already up-to-date",
+                            file_present, file_path_str, file_hash, args.hash
+                        ))
 
         # Summary logging
         logging.info("Summary: total=%d, to_update=%d, up_to_date=%d, errors=%d", total_apps, to_update, up_to_date, errors)
         logging.info("Downloaded apps: %s", downloaded_apps)
         logging.info("Skipped apps: %s", skipped_apps)
+        
+        # Write download log if any files were downloaded
+        if downloaded_apps:
+            log_file = Path(args.outdir) / "download.log"
+            try:
+                with log_file.open("a", encoding="utf-8") as lf:
+                    timestamp = datetime.datetime.now().isoformat()
+                    lf.write(f"\n=== Download Session: {timestamp} ===\n")
+                    lf.write(f"Output Directory: {Path(args.outdir).absolute()}\n")
+                    lf.write(f"Downloaded {len(downloaded_apps)} app(s):\n")
+                    for fname in downloaded_apps:
+                        full_path = Path(args.outdir) / fname
+                        lf.write(f"  - {fname} ({full_path.absolute()})\n")
+                    lf.write(f"Summary: total={total_apps}, to_update={to_update}, up_to_date={up_to_date}, errors={errors}\n")
+                logging.info("Download log written to %s", log_file.absolute())
+            except Exception as e:
+                logging.warning("Failed to write download log: %s", e)
+        
         # Mismatch info (Phase 2) already collected per entry; could aggregate here later
 
         # Optional summary table
