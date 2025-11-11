@@ -4,6 +4,9 @@ login.json
 # User configuration
 Your_apps.json
 
+# Backup files
+*.bak-*
+
 # Downloaded apps
 downloads/
 *.tgz

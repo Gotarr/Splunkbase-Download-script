@@ -1,12 +1,5 @@
 [
     {
-        "name": "Splunk Common Information Model (CIM)",
-        "uid": 1621,
-        "appid": "Splunk_SA_CIM",
-        "updated_time": "2025-08-21T23:13:08+00:00",
-        "version": "6.2.0"
-    },
-    {
         "name": "Splunk Add-on for Microsoft Windows",
         "uid": 742,
         "appid": "Splunk_TA_windows",
@@ -26,5 +19,12 @@
         "appid": "lookup_editor",
         "updated_time": "2025-09-04T15:11:08+00:00",
         "version": "4.0.6"
+    },
+    {
+        "name": "Splunk Common Information Model (CIM)",
+        "uid": 1621,
+        "appid": "Splunk_SA_CIM",
+        "updated_time": "2025-08-21T23:13:08+00:00",
+        "version": "6.2.0"
     }
 ]

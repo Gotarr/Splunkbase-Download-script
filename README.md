@@ -56,6 +56,11 @@ python splunkbase-download.py --dry-run --summary
 
 - Download Splunkbase apps listed in `Your_apps.json`
 - **Interactive onboarding**: Add apps by UID or from existing TGZ filenames (`--onboard`)
+- **Automatic backup rotation**: Configurable retention of `Your_apps.json` backups (`--backup-keep`)
+- **CI/CD integration**: Exit codes for automated pipelines (`--fail-on-errors`)
+- **Smart filtering**: Process only specific apps or exclude certain ones (`--only`, `--exclude`)
+- **File integrity**: SHA256 hash calculation for verification (`--hash`)
+- **Missing file repair**: Automatically re-download missing files (`--fix-missing`)
 - Secure authentication via `login.json` or interactive prompt (`--prompt-login`)
 - Validation mode: Check `Your_apps.json` schema and consistency (`--validate`)
 - File mismatch detection: Verify downloaded files match declared versions
@@ -326,6 +331,27 @@ python splunkbase-download.py --validate --only 742,1621 --summary
 python splunkbase-download.py --validate --exclude 1809
 ```
 
+#### Backup management
+```bash
+# Keep only 3 backups (default is 5)
+python splunkbase-download.py --validate --format-json --backup-keep 3
+
+# Disable backups completely
+python splunkbase-download.py --validate --format-json --backup-keep 0
+
+# View existing backups
+ls Your_apps.json.bak-*
+```
+
+#### CI/CD Integration
+```bash
+# Exit with code 1 if validation fails (for CI pipelines)
+python splunkbase-download.py --validate --fail-on-errors
+
+# Combined: validate, create backup, fail on errors
+python splunkbase-download.py --validate --backup-keep 10 --fail-on-errors
+```
+
 ## Command-Line Flags
 
 ### Core Options
@@ -353,6 +379,16 @@ python splunkbase-download.py --validate --exclude 1809
 
 **Note:** Filters (`--only`/`--exclude`) work in all modes: normal, dry-run, validate, fix-missing
 
+### Backup & CI/CD Integration
+- `--backup-keep N` - Number of backup files to keep before updating `Your_apps.json` (default: 5, 0 to disable)
+- `--fail-on-errors` - Exit with non-zero status if errors or inconsistencies are detected (for CI pipelines)
+
+**Backup behavior:**
+- Backups are created automatically before any `Your_apps.json` modification
+- Format: `Your_apps.json.bak-YYYYMMDD-HHMMSS`
+- Rotation: Only the N most recent backups are kept
+- Set to `0` to disable backups completely
+
 ## Running Tests
 
 Install dependencies and run the test suite with pytest:
@@ -360,6 +396,91 @@ Install dependencies and run the test suite with pytest:
 python -m pip install -r requirements.txt
 pytest -q
 ```
+
+## Troubleshooting
+
+### Authentication Issues
+
+**Problem:** "Login failed" or "401 Unauthorized"
+- Verify credentials in `login.json` are correct
+- Check if your Splunkbase account is active
+- Try `--prompt-login` to enter credentials manually
+- Ensure no trailing spaces in username/password
+
+**Problem:** `login.json` not found
+- Use `--prompt-login` to enter credentials interactively
+- Copy `login.json.example` to `login.json` and edit with your credentials
+
+### Validation Errors
+
+**Problem:** `--validate` reports schema errors
+- Check that all required fields exist: `uid`, `version`, `name`, `appid`, `updated_time`
+- Ensure `uid` is an integer (not a string)
+- Use `--format-json` to reformat and fix common formatting issues
+- Restore from backup if needed: `cp Your_apps.json.bak-<timestamp> Your_apps.json`
+
+**Problem:** Duplicate UIDs detected
+- Remove duplicate entries manually or restore from backup
+- Each app should appear only once in `Your_apps.json`
+
+### Download Issues
+
+**Problem:** Downloads fail with network errors
+- Script automatically retries (3 attempts with backoff)
+- Check internet connection
+- Verify Splunkbase is accessible: https://splunkbase.splunk.com
+- Try again later if Splunkbase is experiencing issues
+
+**Problem:** Downloaded file is corrupted
+- Use `--hash` to verify file integrity with SHA256
+- Re-download with `--fix-missing` after removing the corrupted file
+- Check available disk space
+
+### Missing Files
+
+**Problem:** `file_present: false` in reports
+- Use `--fix-missing` to automatically re-download missing files
+- Run `--validate --summary` to see which files are missing
+- Ensure `--outdir` points to the correct directory
+
+### Backup & Recovery
+
+**Problem:** `Your_apps.json` was corrupted/overwritten
+- List available backups: `ls Your_apps.json.bak-*` (Linux) or `dir Your_apps.json.bak-*` (Windows)
+- Restore from most recent backup: `cp Your_apps.json.bak-<timestamp> Your_apps.json`
+- Backups are timestamped: `YYYYMMDD-HHMMSS`
+
+**Problem:** Too many backup files
+- Adjust retention: `--backup-keep 3` (keeps only 3 most recent)
+- Disable backups: `--backup-keep 0` (not recommended)
+- Manually delete old backups: `rm Your_apps.json.bak-*` (be careful!)
+
+### CI/CD Integration
+
+**Problem:** Pipeline doesn't fail on errors
+- Use `--fail-on-errors` flag to ensure non-zero exit code on errors
+- Example: `python splunkbase-download.py --validate --fail-on-errors`
+- Check exit code: `echo $?` (Linux) or `echo $LASTEXITCODE` (PowerShell)
+
+**Problem:** Want to test without downloading
+- Use `--dry-run --summary` to see what would be updated
+- Combine with `--report-file` to save results: `--dry-run --report-file check.json`
+
+### Performance
+
+**Problem:** Script is slow
+- Downloads are sequential (API rate limiting consideration)
+- Network speed affects download time
+- Use `--only` to process specific apps: `--only 742,833`
+- Large apps take longer to download
+
+### General Tips
+
+- Run `--validate --summary` regularly to check for issues
+- Use `--dry-run` before actual updates to preview changes
+- Keep backups enabled (default: 5 most recent)
+- Check logs with `--verbose` for detailed information
+- Use filters (`--only`/`--exclude`) for targeted operations
 
 ## Security Notes
 

@@ -149,36 +149,55 @@ Rollback: rein additive Felder
 
 ---
 
-## Phase 6 – Backups & Exit-Codes
+## Phase 6 – Backups & Exit-Codes ✅
 Ziel: Sichere Updates und CI-Integration.
 
 Umfang:
-- [ ] Backup-Rotation vor JSON-Update: `Your_apps.json.bak-YYYYMMDD-HHMMSS` (retention via `--backup-keep N`)
-- [ ] `--fail-on-errors`: Exit-Code ≠ 0, wenn `errors > 0` oder Inkonsistenzen gefunden
+- [x] Backup-Rotation vor JSON-Update: `Your_apps.json.bak-YYYYMMDD-HHMMSS` (retention via `--backup-keep N`)
+- [x] `--fail-on-errors`: Exit-Code ≠ 0, wenn `errors > 0` oder Inkonsistenzen gefunden
 
 Abnahmekriterien:
-- Backups werden erzeugt und rotiert
-- CI kann auf Fehler reagieren
+- Backups werden erzeugt und rotiert ✅
+- CI kann auf Fehler reagieren ✅
 
 Tests:
-- [ ] Backup-Datei existiert
-- [ ] `--fail-on-errors` setzt Exit-Code ≠ 0 bei Fehlern
+- [x] Backup-Datei existiert
+- [x] Rotation funktioniert (--backup-keep 3 behält nur 3 neueste)
+- [x] --backup-keep 0 deaktiviert Backups komplett
+- [x] `--fail-on-errors` setzt Exit-Code = 1 bei Fehlern
+- [x] Exit-Code = 0 bei erfolgreicher Validierung ohne Fehler
+- [x] Backup-Funktion in allen JSON-Update-Pfaden integriert
 
 Rollback: Backups ermöglichen Wiederherstellung
 
+**Status:** ✅ Vollständig implementiert und getestet (11.11.2025)
+
 ---
 
-## Phase 7 – README & Dokumentation
+## Phase 7 – README & Dokumentation ✅
 Ziel: Gute Bedienbarkeit.
 
 Umfang:
-- [ ] README ergänzt um neue Flags + Beispiele
-- [ ] Kurze Troubleshooting-Hinweise
+- [x] README ergänzt um neue Flags + Beispiele
+- [x] Feature-Liste aktualisiert mit allen neuen Funktionen
+- [x] Troubleshooting-Hinweise hinzugefügt
+- [x] Beispiele für Backup-Management
+- [x] Beispiele für CI/CD-Integration
+- [x] Beispiele für Filtering und Hash-Berechnung
 
 Abnahmekriterien:
-- README verständlich, Beispiele funktionieren
+- README verständlich, Beispiele funktionieren ✅
+- Troubleshooting-Abschnitt deckt häufige Probleme ab ✅
+- Alle neuen Flags dokumentiert ✅
+
+Tests:
+- [x] Alle Beispiele im README funktionieren
+- [x] Troubleshooting-Tipps sind hilfreich und korrekt
+- [x] Feature-Liste vollständig
 
 Rollback: Nur Doku
+
+**Status:** ✅ Vollständig implementiert (11.11.2025)
 
 ---
 

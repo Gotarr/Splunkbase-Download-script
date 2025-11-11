@@ -13,6 +13,7 @@ import tempfile
 import datetime
 import os
 import hashlib
+import shutil
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter
@@ -94,9 +95,17 @@ def download_stream(app_id, app_version, cookies, downloaded_apps, skipped_apps,
         return None
 
 
-def update_Your_apps_file_atomic(apps_data, uid, new_version, updated_time, file_path="Your_apps.json"):
+def update_Your_apps_file_atomic(apps_data, uid, new_version, updated_time, file_path="Your_apps.json", backup_keep: Optional[int] = 5):
     """Atomically update Your_apps.json by writing to a temp file and replacing the original.
     Modifies apps_data in-memory as well.
+    
+    Args:
+        apps_data: List of app dictionaries
+        uid: App UID to update
+        new_version: New version string
+        updated_time: New timestamp
+        file_path: Path to Your_apps.json
+        backup_keep: Number of backups to keep (None=use default 5, 0=no backups)
     """
     found = False
     for app in apps_data:
@@ -111,6 +120,13 @@ def update_Your_apps_file_atomic(apps_data, uid, new_version, updated_time, file
         apps_data.append({"uid": uid, "version": new_version, "updated_time": updated_time})
 
     file_path_obj = Path(file_path)
+    
+    # Create backup before updating
+    if backup_keep is None:
+        backup_keep = 5  # Default
+    if backup_keep != 0:
+        create_backup(file_path_obj, backup_keep)
+    
     dir_name = str(file_path_obj.parent) or "."
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix="your_apps_", suffix=".json")
     try:
@@ -136,9 +152,86 @@ def update_Your_apps_file_atomic(apps_data, uid, new_version, updated_time, file
         raise
 
 
-def atomic_write_json(file_path: Path, data: Any) -> None:
-    """Atomically write JSON to file_path with UTF-8 encoding."""
+def create_backup(file_path: Path, backup_keep: int = 5) -> Optional[Path]:
+    """Create a timestamped backup of file_path and rotate old backups.
+    
+    Args:
+        file_path: Path to the file to backup
+        backup_keep: Number of backups to keep (0 = no backups, None = keep all)
+        
+    Returns:
+        Path to created backup file, or None if backup was skipped/failed
+    """
+    if backup_keep == 0:
+        logging.debug("Backups disabled (backup_keep=0)")
+        return None
+    
+    if not file_path.exists():
+        logging.debug("No file to backup: %s", file_path)
+        return None
+    
+    # Create backup with timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = file_path.parent / f"{file_path.name}.bak-{timestamp}"
+    
+    try:
+        import shutil
+        shutil.copy2(file_path, backup_path)
+        logging.info("Created backup: %s", backup_path)
+        
+        # Rotate old backups
+        if backup_keep is not None and backup_keep > 0:
+            rotate_backups(file_path, backup_keep)
+        
+        return backup_path
+    except Exception as e:
+        logging.warning("Failed to create backup: %s", e)
+        return None
+
+
+def rotate_backups(file_path: Path, keep_count: int) -> None:
+    """Delete old backup files, keeping only the N most recent.
+    
+    Args:
+        file_path: Original file path (backups are named file_path.bak-TIMESTAMP)
+        keep_count: Number of most recent backups to keep
+    """
+    if keep_count <= 0:
+        return
+    
+    # Find all backup files
+    backup_pattern = f"{file_path.name}.bak-*"
+    backup_files = sorted(
+        file_path.parent.glob(backup_pattern),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True  # Newest first
+    )
+    
+    # Delete old backups beyond keep_count
+    for old_backup in backup_files[keep_count:]:
+        try:
+            old_backup.unlink()
+            logging.debug("Deleted old backup: %s", old_backup)
+        except Exception as e:
+            logging.warning("Failed to delete old backup %s: %s", old_backup, e)
+
+
+def atomic_write_json(file_path: Path, data: Any, backup_keep: Optional[int] = 5) -> None:
+    """Atomically write JSON to file_path with UTF-8 encoding.
+    
+    Args:
+        file_path: Path to write JSON to
+        data: Data to serialize to JSON
+        backup_keep: Number of backups to keep (None=use default 5, 0=no backups)
+    """
     file_path = Path(file_path)
+    
+    # Create backup before writing
+    if backup_keep is None:
+        backup_keep = 5  # Default
+    if backup_keep != 0:
+        create_backup(file_path, backup_keep)
+    
     dir_name = str(file_path.parent) or "."
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix="your_apps_", suffix=".json")
     try:
@@ -885,7 +978,7 @@ def onboard_apps_from_files(file_source, session=None):
     formatted = format_apps_for_readability(combined, sort_by="name")
     
     try:
-        atomic_write_json(apps_file, formatted)
+        atomic_write_json(apps_file, formatted, backup_keep=args.backup_keep)
         print(f"\n[OK] Successfully added {len(new_apps)} app(s) to Your_apps.json")
         print("\nAdded apps:")
         for app in new_apps:
@@ -974,7 +1067,7 @@ def onboard_apps_interactive(session=None):
     
     # Atomic write
     try:
-        atomic_write_json(apps_file, formatted)
+        atomic_write_json(apps_file, formatted, backup_keep=args.backup_keep)
         print(f"\n[OK] Successfully added {len(new_apps)} app(s) to Your_apps.json")
         print("Added apps:")
         for app in new_apps:
@@ -1026,9 +1119,15 @@ if __name__ == "__main__":
         parser.add_argument("--only", metavar="UIDS", help="Process only the specified UIDs (comma-separated, e.g., --only 742,833,1621)")
         parser.add_argument("--exclude", metavar="UIDS", help="Exclude the specified UIDs from processing (comma-separated, e.g., --exclude 1809)")
         parser.add_argument("--hash", action="store_true", help="Calculate SHA256 hash for existing .tgz files and include in report")
+        parser.add_argument("--backup-keep", type=int, metavar="N", help="Number of backup files to retain (default: 5); set to 0 to disable backups")
+        parser.add_argument("--fail-on-errors", action="store_true", help="Exit with non-zero status if errors or inconsistencies are found (useful for CI/CD)")
         parser.add_argument("--onboard", action="store_true", help="Interactive mode: add new apps to Your_apps.json by UID; fetches metadata from Splunkbase")
         parser.add_argument("--from-files", metavar="PATH", help="With --onboard: extract UIDs from .tgz filenames in a directory or text file (one filename per line)")
         args = parser.parse_args()
+
+        # Set default for backup_keep if not specified
+        if args.backup_keep is None:
+            args.backup_keep = 5  # Default: keep 5 backups
 
         # Configure logging
         logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -1141,7 +1240,7 @@ if __name__ == "__main__":
             if args.format_json:
                 try:
                     formatted = format_apps_for_readability(apps_data_from_file)
-                    atomic_write_json(apps_file, formatted)
+                    atomic_write_json(apps_file, formatted, backup_keep=args.backup_keep)
                     logging.info("Reformatted Your_apps.json for readability")
                 except Exception as e:
                     logging.error("Failed to format Your_apps.json: %s", e)
@@ -1238,7 +1337,7 @@ if __name__ == "__main__":
                 updated_time = download_stream(uid, latest_version, cookies, downloaded_apps, skipped_apps, out_dir=out_dir, session=session)
                 if updated_time:
                     # Update file atomically
-                    update_Your_apps_file_atomic(apps_data_from_file, uid, latest_version, updated_time, file_path=str(apps_file))
+                    update_Your_apps_file_atomic(apps_data_from_file, uid, latest_version, updated_time, file_path=str(apps_file), backup_keep=args.backup_keep)
                     # After download, calculate hash of new file if --hash enabled
                     new_file_path = expected_file_path(Path(args.outdir), uid, latest_version)
                     new_file_hash = calculate_sha256(new_file_path) if args.hash else None
@@ -1268,7 +1367,7 @@ if __name__ == "__main__":
                         updated_time = download_stream(uid, current_version, cookies, downloaded_apps, skipped_apps, out_dir=out_dir, session=session)
                         if updated_time:
                             # Touch updated_time for the same version to reflect fresh download
-                            update_Your_apps_file_atomic(apps_data_from_file, uid, current_version, updated_time, file_path=str(apps_file))
+                            update_Your_apps_file_atomic(apps_data_from_file, uid, current_version, updated_time, file_path=str(apps_file), backup_keep=args.backup_keep)
                             redownload_path = expected_file_path(Path(args.outdir), uid, current_version)
                             redownload_hash = calculate_sha256(redownload_path) if args.hash else None
                             eval_results.append(create_eval_result(
@@ -1347,5 +1446,13 @@ if __name__ == "__main__":
             except Exception as e:
                 logging.error("Failed to write report file: %s", e)
 
+        # Exit with error code if --fail-on-errors is set and errors occurred
+        if args.fail_on_errors and errors > 0:
+            logging.error(f"Exiting with error code 1 due to {errors} error(s)")
+            sys.exit(1)
+
     except Exception as e:
         logging.exception("An error occurred: %s", e)
+        # Exit with error code if --fail-on-errors is set
+        if hasattr(args, 'fail_on_errors') and args.fail_on_errors:
+            sys.exit(1)
